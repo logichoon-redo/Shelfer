@@ -6,16 +6,26 @@
 import ComposableArchitecture
 import Foundation
 
+enum ShelfDockEdge: Equatable, Sendable {
+    case left
+    case right
+}
+
 @Reducer
 struct ShelfFeature {
     @ObservableState
-    struct State: Equatable {
+    struct State: Equatable, Identifiable {
+        var id = UUID()
         var items: IdentifiedArrayOf<ShelfItem> = []
 
         /// Whether a shelf is on screen, and where it was last summoned.
         /// The window layer mirrors these rather than owning the decision.
         var isPresented = false
         var position: CGPoint?
+
+        /// While docked, the panel is mostly outside this screen edge. The
+        /// window controller retains its exact undocked frame for restoration.
+        var dockedEdge: ShelfDockEdge?
 
         /// True only while the pointer is carrying an active drag payload.
         /// Drag-only controls stay completely hidden at every other time.
@@ -57,12 +67,10 @@ struct ShelfFeature {
     }
 
     enum Action: Equatable {
-        /// Begin listening for drag gestures. Sent once at launch.
-        case task
         case dragActivityChanged(Bool)
         case shelfDragActivityChanged(Bool)
-        case shelfRequested(CGPoint)
-        case dragEnded
+        case dockRequested(ShelfDockEdge)
+        case undockRequested
         case itemsDropped([ShelfItem.Content])
         case itemsDraggedOut([ShelfItem.Content])
         case closeButtonTapped
@@ -84,7 +92,6 @@ struct ShelfFeature {
         case hideRequested
     }
 
-    @Dependency(\.dragMonitor) var dragMonitor
     @Dependency(\.workspace) var workspace
     @Dependency(\.pasteboard) var pasteboard
     @Dependency(\.sharing) var sharing
@@ -100,20 +107,6 @@ struct ShelfFeature {
     var body: some Reducer<State, Action> {
         Reduce { state, action in
             switch action {
-            case .task:
-                return .run { send in
-                    for await event in await dragMonitor.events() {
-                        switch event {
-                        case let .activityChanged(isActive):
-                            await send(.dragActivityChanged(isActive))
-                        case let .shelfRequested(point):
-                            await send(.shelfRequested(point))
-                        case .dragEnded:
-                            await send(.dragEnded)
-                        }
-                    }
-                }
-
             case let .dragActivityChanged(isActive):
                 state.isDragActive = isActive
                 return .none
@@ -122,16 +115,13 @@ struct ShelfFeature {
                 state.isShelfDragActive = isActive
                 return .none
 
-            case let .shelfRequested(point):
-                state.position = point
-                state.isPresented = true
+            case let .dockRequested(edge):
+                guard state.isPresented else { return .none }
+                state.dockedEdge = edge
                 return .none
 
-            case .dragEnded:
-                state.isDragActive = false
-                // A shelf summoned mid-drag that never received anything was not
-                // wanted, so it shouldn't linger on screen.
-                if state.isEmpty { state.isPresented = false }
+            case .undockRequested:
+                state.dockedEdge = nil
                 return .none
 
             case let .itemsDropped(contents):
@@ -160,6 +150,7 @@ struct ShelfFeature {
                     state.isPresented = false
                     state.isExpanded = false
                     state.showsEmptyCloseButton = false
+                    state.dockedEdge = nil
                 }
                 return .none
 
@@ -169,6 +160,7 @@ struct ShelfFeature {
                 state.isExpanded = false
                 state.isClearing = false
                 state.showsEmptyCloseButton = false
+                state.dockedEdge = nil
                 return .cancel(id: CancelID.clearAnimation)
 
             case .clearButtonTapped:
@@ -242,6 +234,7 @@ struct ShelfFeature {
 
             case .hideRequested:
                 state.isPresented = false
+                state.dockedEdge = nil
                 return .none
             }
         }

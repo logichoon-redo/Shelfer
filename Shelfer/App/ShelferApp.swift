@@ -17,7 +17,7 @@ struct ShelferApp: App {
 
             Button(store.isPresented ? "Hide Shelf" : "Show Shelf") {
                 store.send(
-                    store.isPresented ? .hideRequested : .shelfRequested(NSEvent.mouseLocation)
+                    store.isPresented ? .hideRequested : .showRequested(NSEvent.mouseLocation)
                 )
             }
 

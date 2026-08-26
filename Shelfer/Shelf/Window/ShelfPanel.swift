@@ -8,6 +8,8 @@ import AppKit
 /// Borderless floating panel that hosts the shelf without stealing focus from the
 /// app the user is dragging from.
 final class ShelfPanel: NSPanel {
+    var frameAnimationDuration = ShelfMetrics.expansionAnimationDuration
+
     init(contentRect: NSRect) {
         super.init(
             contentRect: contentRect,
@@ -34,7 +36,7 @@ final class ShelfPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     override func animationResizeTime(_ newFrame: NSRect) -> TimeInterval {
-        ShelfMetrics.expansionAnimationDuration
+        frameAnimationDuration
     }
 }
 

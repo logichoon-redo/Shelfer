@@ -23,6 +23,14 @@ enum ShelfMetrics {
     static let clearAnimationDuration = 0.26
 }
 
+/// The part of a docked shelf that remains on screen as its return handle.
+enum ShelfDockMetrics {
+    static let revealedWidth: CGFloat = 33
+    static let handleWidth: CGFloat = 33
+    static let cornerTargetSize: CGFloat = 52
+    static let animationDuration = 0.32
+}
+
 enum ShelfShareMetrics {
     static let gap: CGFloat = 8
     static let circleDiameter: CGFloat = 44

@@ -17,26 +17,35 @@ struct ShelfView: View {
     var body: some View {
         ZStack {
             border
-            ShelfSurface(
-                onTargetedChange: { isTargeted = $0 },
-                onDrop: { store.send(.itemsDropped($0)) }
-            )
 
-            Group {
-                if store.isExpanded {
-                    ShelfDetailView(store: store)
-                        .transition(contentTransition)
-                } else if store.isEmpty {
-                    emptyState
-                        .transition(contentTransition)
-                } else {
-                    filledState
-                        .transition(contentTransition)
+            if let dockedEdge = store.dockedEdge {
+                ShelfDockedHandle(edge: dockedEdge) {
+                    store.send(.undockRequested)
                 }
+            } else {
+                ShelfSurface(
+                    onTargetedChange: { isTargeted = $0 },
+                    onDrop: { store.send(.itemsDropped($0)) }
+                )
+
+                Group {
+                    if store.isExpanded {
+                        ShelfDetailView(store: store)
+                            .transition(contentTransition)
+                    } else if store.isEmpty {
+                        emptyState
+                            .transition(contentTransition)
+                    } else {
+                        filledState
+                            .transition(contentTransition)
+                    }
+                }
+                // Keep SwiftUI's animation transaction on the controls only. The
+                // panel owns all geometry changes.
+                .animation(expansionAnimation, value: store.isExpanded)
+
+                dockCornerTargets
             }
-            // Keep SwiftUI's animation transaction on the controls only. The
-            // panel owns all geometry changes.
-            .animation(expansionAnimation, value: store.isExpanded)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onHover { isHoveringShelf = $0 }
@@ -72,12 +81,44 @@ struct ShelfView: View {
             .allowsHitTesting(false)
     }
 
+    private var dockCornerTargets: some View {
+        HStack(spacing: 0) {
+            ShelfDockChevron(
+                pointsRight: false,
+                idleOpacity: 0,
+                hoverOpacity: 0.18,
+                accessibilityLabel: "Dock shelf on the left"
+            ) {
+                store.send(.dockRequested(.left))
+            }
+            .frame(
+                width: ShelfDockMetrics.cornerTargetSize,
+                height: ShelfDockMetrics.cornerTargetSize
+            )
+
+            Spacer(minLength: 0)
+
+            ShelfDockChevron(
+                pointsRight: true,
+                idleOpacity: 0,
+                hoverOpacity: 0.18,
+                accessibilityLabel: "Dock shelf on the right"
+            ) {
+                store.send(.dockRequested(.right))
+            }
+            .frame(
+                width: ShelfDockMetrics.cornerTargetSize,
+                height: ShelfDockMetrics.cornerTargetSize
+            )
+        }
+        .padding(.horizontal, 2)
+        .padding(.bottom, 2)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+    }
+
     private var emptyState: some View {
         ZStack {
-            Text("Drop files here")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(.white.opacity(0.45))
-                .allowsHitTesting(false)
+            EmptyShelfPrompt(isPresented: store.isPresented)
 
             if store.showsEmptyCloseButton {
                 VStack(spacing: 0) {
@@ -250,6 +291,61 @@ struct ShelfView: View {
     }
 }
 
+/// Introduces the empty drop target with the short, damped pop used by the
+/// reference shelf, without leaving a perpetual animation on screen.
+private struct EmptyShelfPrompt: View {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @State private var scale: CGFloat = 1.13
+    @State private var opacity = 0.0
+
+    let isPresented: Bool
+
+    var body: some View {
+        Text("Drop files here")
+            .font(.system(size: 16, weight: .medium))
+            .foregroundStyle(.white.opacity(0.45))
+            .scaleEffect(scale)
+            .opacity(opacity)
+            .allowsHitTesting(false)
+            .task(id: isPresented) {
+                guard isPresented else {
+                    scale = 1.13
+                    opacity = 0
+                    return
+                }
+
+                guard !accessibilityReduceMotion else {
+                    scale = 1
+                    opacity = 1
+                    return
+                }
+
+                // On the first summon the hosting view and its panel are created
+                // in the same run-loop turn. Give AppKit two display frames to
+                // order the panel before beginning the prompt animation.
+                do {
+                    try await Task.sleep(for: .milliseconds(32))
+                } catch {
+                    return
+                }
+
+                withAnimation(.easeOut(duration: 0.05)) {
+                    opacity = 1
+                }
+
+                withAnimation(
+                    .spring(
+                        response: 0.36,
+                        dampingFraction: 0.36,
+                        blendDuration: 0
+                    )
+                ) {
+                    scale = 1
+                }
+            }
+    }
+}
+
 extension View {
     func shelfHoverHighlight() -> some View {
         modifier(ShelfHoverHighlightModifier())
@@ -268,5 +364,95 @@ private struct ShelfHoverHighlightModifier: ViewModifier {
             }
             .onHover { isHovering = $0 }
             .animation(.easeOut(duration: 0.12), value: isHovering)
+    }
+}
+
+/// The compact hint shared by the undocked corner targets and the visible tab
+/// of a docked shelf. Its movement begins only while the pointer is over the
+/// interaction, keeping the resting shelf visually quiet.
+private struct ShelfDockChevron: View {
+    let pointsRight: Bool
+    let idleOpacity: Double
+    let hoverOpacity: Double
+    let accessibilityLabel: String
+    let action: () -> Void
+
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @State private var isHovering = false
+    @State private var isShifted = false
+
+    var body: some View {
+        ZStack {
+            Color.white.opacity(0.001)
+
+            Image(systemName: pointsRight ? "chevron.right.2" : "chevron.left.2")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .offset(x: isShifted ? (pointsRight ? 2.5 : -2.5) : 0)
+                .opacity(isHovering ? hoverOpacity : idleOpacity)
+                .allowsHitTesting(false)
+        }
+        .contentShape(Rectangle())
+        .onHover { isHovering = $0 }
+        .onTapGesture(count: 2, perform: action)
+        .animation(.easeOut(duration: 0.16), value: isHovering)
+        .task(id: shouldPulse) {
+            isShifted = false
+            guard shouldPulse else { return }
+
+            while !Task.isCancelled {
+                withAnimation(.easeInOut(duration: 0.55)) {
+                    isShifted.toggle()
+                }
+
+                do {
+                    try await Task.sleep(for: .milliseconds(550))
+                } catch {
+                    isShifted = false
+                    return
+                }
+            }
+        }
+        .accessibilityElement()
+        .accessibilityAddTraits(.isButton)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint("Double-click")
+    }
+
+    private var shouldPulse: Bool {
+        isHovering && !accessibilityReduceMotion
+    }
+}
+
+/// A right-docked panel exposes its leading edge and points back to the left;
+/// a left-docked panel mirrors that arrangement.
+private struct ShelfDockedHandle: View {
+    let edge: ShelfDockEdge
+    let onDoubleClick: () -> Void
+
+    var body: some View {
+        HStack(spacing: 0) {
+            if edge == .right {
+                handle(pointsRight: false)
+                Spacer(minLength: 0)
+            } else {
+                Spacer(minLength: 0)
+                handle(pointsRight: true)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func handle(pointsRight: Bool) -> some View {
+        ShelfDockChevron(
+            pointsRight: pointsRight,
+            idleOpacity: 0.2,
+            hoverOpacity: 0.34,
+            accessibilityLabel: "Restore shelf"
+        ) {
+            onDoubleClick()
+        }
+        .frame(width: ShelfDockMetrics.handleWidth)
+        .frame(maxHeight: .infinity)
     }
 }

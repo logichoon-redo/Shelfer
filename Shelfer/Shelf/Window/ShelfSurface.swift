@@ -40,6 +40,13 @@ struct ShelfSurface: NSViewRepresentable {
 
         // MARK: - Moving the panel
 
+        /// Let a click-drag reach the surface even while another application is
+        /// active. Without this, AppKit consumes the first mouse-down only to
+        /// activate the panel, so moving the shelf requires a second attempt.
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+            true
+        }
+
         override func mouseDown(with event: NSEvent) {
             window?.performDrag(with: event)
         }

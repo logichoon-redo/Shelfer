@@ -23,38 +23,6 @@ struct ShelfFeatureTests {
         URL(fileURLWithPath: "/tmp/\(name)")
     }
 
-    // MARK: - Summoning
-
-    @Test func shakeSummonsAnEmptyShelfAtTheCursor() async {
-        let store = makeStore()
-        let point = CGPoint(x: 120, y: 340)
-
-        await store.send(.shelfRequested(point)) {
-            $0.position = point
-            $0.isPresented = true
-        }
-
-        #expect(store.state.isEmpty)
-    }
-
-    @Test func anUnusedShelfIsDismissedWhenTheDragEnds() async {
-        let store = makeStore(
-            ShelfFeature.State(isPresented: true, position: .zero)
-        )
-
-        await store.send(.dragEnded) {
-            $0.isPresented = false
-        }
-    }
-
-    @Test func aShelfHoldingFilesSurvivesTheDragEnding() async {
-        let store = makeStore(
-            ShelfFeature.State(items: [ShelfItem(.file(url("a.txt")))], isPresented: true)
-        )
-
-        await store.send(.dragEnded)
-    }
-
     // MARK: - Dropping in
 
     @Test func droppedFilesLandOnTheShelf() async {
@@ -245,6 +213,44 @@ struct ShelfFeatureTests {
         await store.send(.hideRequested) {
             $0.isPresented = false
         }
+    }
+
+    // MARK: - Edge docking
+
+    @Test func eitherBottomCornerCanDockTheShelf() async {
+        let store = makeStore(ShelfFeature.State(isPresented: true))
+
+        await store.send(.dockRequested(.left)) {
+            $0.dockedEdge = .left
+        }
+
+        await store.send(.dockRequested(.right)) {
+            $0.dockedEdge = .right
+        }
+    }
+
+    @Test func doubleClickingTheDockHandleMakesTheShelfUndocked() async {
+        let store = makeStore(
+            ShelfFeature.State(isPresented: true, dockedEdge: .right)
+        )
+
+        await store.send(.undockRequested) {
+            $0.dockedEdge = nil
+        }
+    }
+
+    @Test func hidingClearsDockingButKeepsTheContents() async {
+        let item = ShelfItem(.file(url("a.txt")))
+        let store = makeStore(
+            ShelfFeature.State(items: [item], isPresented: true, dockedEdge: .right)
+        )
+
+        await store.send(.hideRequested) {
+            $0.isPresented = false
+            $0.dockedEdge = nil
+        }
+
+        #expect(store.state.items == [item])
     }
 
     // MARK: - Detail view
@@ -513,45 +519,6 @@ struct ShelfFeatureTests {
         #expect(PasteboardClient.writeImage(at: imageURL, to: pasteboard))
         #expect(pasteboard.data(forType: .tiff) != nil)
         #expect(pasteboard.data(forType: .png) != nil)
-    }
-
-    // MARK: - Drag monitor wiring
-
-    @Test func dragMonitorEventsDriveTheShelf() async {
-        let (stream, continuation) = AsyncStream<DragEvent>.makeStream()
-        let point = CGPoint(x: 10, y: 20)
-
-        let store = TestStore(initialState: ShelfFeature.State()) {
-            ShelfFeature()
-        } withDependencies: {
-            $0.dragMonitor = DragMonitorClient(events: { stream })
-        }
-
-        let task = await store.send(.task)
-
-        continuation.yield(.activityChanged(true))
-        await store.receive(.dragActivityChanged(true)) {
-            $0.isDragActive = true
-        }
-
-        continuation.yield(.shelfRequested(point))
-        await store.receive(.shelfRequested(point)) {
-            $0.position = point
-            $0.isPresented = true
-        }
-
-        continuation.yield(.activityChanged(false))
-        await store.receive(.dragActivityChanged(false)) {
-            $0.isDragActive = false
-        }
-
-        continuation.yield(.dragEnded)
-        await store.receive(.dragEnded) {
-            $0.isPresented = false
-        }
-
-        continuation.finish()
-        await task.cancel()
     }
 
     @Test func shelfDragKeepsShareDropletActiveUntilItsSessionEnds() async {

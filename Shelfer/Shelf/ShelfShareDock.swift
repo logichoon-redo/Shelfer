@@ -16,11 +16,16 @@ struct ShelfPanelContentView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: shelfSize.height)
 
-            ShelfShareDock(store: store)
-                .frame(
-                    width: ShelfShareMetrics.dockSize.width,
-                    height: ShelfShareMetrics.dockSize.height
-                )
+            if store.dockedEdge == nil {
+                ShelfShareDock(store: store)
+                    .frame(
+                        width: ShelfShareMetrics.dockSize.width,
+                        height: ShelfShareMetrics.dockSize.height
+                    )
+            } else {
+                Color.clear
+                    .frame(height: ShelfShareMetrics.dockSize.height)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }

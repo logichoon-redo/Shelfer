@@ -7,17 +7,17 @@ import AppKit
 import ComposableArchitecture
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let store = Store(initialState: ShelfFeature.State()) {
-        ShelfFeature()
+    let store = Store(initialState: ShelvesFeature.State()) {
+        ShelvesFeature()
     }
 
-    private lazy var shelfController = ShelfWindowController(store: store)
+    private lazy var shelvesController = ShelvesWindowController(store: store)
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
         // Instantiating the controller starts it observing the store.
-        _ = shelfController
+        _ = shelvesController
         store.send(.task)
 
         // Debug affordance: fill a shelf without a real drag,
@@ -27,12 +27,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 ShelfItem.Content.file(URL(fileURLWithPath: String($0)))
             }
             if let screen = NSScreen.main {
-                store.send(.shelfRequested(CGPoint(x: screen.frame.midX - 380, y: screen.frame.midY)))
+                store.send(.showRequested(CGPoint(x: screen.frame.midX - 380, y: screen.frame.midY)))
             }
-            store.send(.itemsDropped(contents))
+
+            guard let shelfID = store.shelves.last?.id else { return }
+            store.send(
+                .shelves(.element(id: shelfID, action: .itemsDropped(contents)))
+            )
 
             if ProcessInfo.processInfo.environment["Shelfer_DEBUG_EXPAND"] != nil {
-                store.send(.expandButtonTapped)
+                store.send(
+                    .shelves(.element(id: shelfID, action: .expandButtonTapped))
+                )
             }
         }
     }
