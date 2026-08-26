@@ -49,10 +49,10 @@ private struct ShelfShareDock: View {
                 )
             }
 
-            shareCircle(
-                systemImage: "square.and.arrow.up",
-                isTargeted: false
-            )
+            shareCircle(isTargeted: false) {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: 16, weight: .semibold))
+            }
                 .modifier(
                     ShareDropletEmergenceModifier(
                         progress: emergenceProgress
@@ -68,10 +68,9 @@ private struct ShelfShareDock: View {
 
             ForEach(Array(ShelfShareMethod.allCases.enumerated()), id: \.element) { index, method in
                 VStack(spacing: 4) {
-                    shareCircle(
-                        systemImage: method.systemImage,
-                        isTargeted: hoveredMethod == method
-                    )
+                    shareCircle(isTargeted: hoveredMethod == method) {
+                        method.icon
+                    }
                     Text(method.shortTitle)
                         .font(.system(size: 9, weight: .medium))
                         .foregroundStyle(.white.opacity(0.72))
@@ -176,12 +175,11 @@ private struct ShelfShareDock: View {
         }
     }
 
-    private func shareCircle(
-        systemImage: String,
-        isTargeted: Bool
+    private func shareCircle<Icon: View>(
+        isTargeted: Bool,
+        @ViewBuilder icon: () -> Icon
     ) -> some View {
-        Image(systemName: systemImage)
-            .font(.system(size: 16, weight: .semibold))
+        icon()
             .foregroundStyle(.white)
             .frame(
                 width: ShelfShareMetrics.circleDiameter,
@@ -362,13 +360,39 @@ private extension ShelfShareMethod {
         }
     }
 
-    var systemImage: String {
+    @MainActor
+    @ViewBuilder
+    var icon: some View {
         switch self {
-        case .airDrop: "airdrop"
-        case .email: "envelope.fill"
-        case .kakaoTalk: "message.fill"
+        case .airDrop:
+            if let image = ShelfShareIcons.airDrop {
+                Image(nsImage: image)
+                    .renderingMode(.template)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 18, height: 18)
+            } else {
+                Image(systemName: "antenna.radiowaves.left.and.right")
+                    .font(.system(size: 16, weight: .semibold))
+            }
+        case .email:
+            Image(systemName: "envelope.fill")
+                .font(.system(size: 16, weight: .semibold))
+        case .kakaoTalk:
+            Image(systemName: "message.fill")
+                .font(.system(size: 16, weight: .semibold))
         }
     }
+}
+
+@MainActor
+private enum ShelfShareIcons {
+    static let airDrop: NSImage? = {
+        let path = "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/SidebarAirDrop.icns"
+        guard let image = NSImage(contentsOfFile: path) else { return nil }
+        image.isTemplate = true
+        return image
+    }()
 }
 
 @MainActor
@@ -467,10 +491,10 @@ private struct ShareDropSurface: NSViewRepresentable {
                 return .copy
             }
 
-            // Keep the split menu and its last highlighted option alive while
-            // crossing the small gaps between circles. The exact hit target is
-            // checked again at drop time, so releasing in a gap shares nothing.
-            if let method = method(at: location), method != hoveredMethod {
+            // Treat the entire split row as one continuous focus area. Gaps and
+            // outer padding select the nearest circle, while the exact circle is
+            // still checked again at drop time.
+            if let method = focusedMethod(at: location), method != hoveredMethod {
                 hoveredMethod = method
                 onHoveredMethodChange(method)
                 ShelfHaptics.alignment()
@@ -491,6 +515,18 @@ private struct ShareDropSurface: NSViewRepresentable {
                 }
             }
             return nil
+        }
+
+        private func focusedMethod(at point: CGPoint) -> ShelfShareMethod? {
+            guard bounds.contains(point) else { return nil }
+
+            return ShelfShareMethod.allCases.enumerated().min { lhs, rhs in
+                let lhsCenterX = bounds.midX
+                    + CGFloat(lhs.offset - 1) * ShelfShareMetrics.optionStride
+                let rhsCenterX = bounds.midX
+                    + CGFloat(rhs.offset - 1) * ShelfShareMetrics.optionStride
+                return abs(point.x - lhsCenterX) < abs(point.x - rhsCenterX)
+            }?.element
         }
 
         private func circleRect(centerX: CGFloat) -> CGRect {
