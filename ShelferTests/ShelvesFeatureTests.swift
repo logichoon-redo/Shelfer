@@ -128,6 +128,96 @@ struct ShelvesFeatureTests {
         }
     }
 
+    @Test func droppingDirectlyOnANotchCreatesAStoredShelf() async {
+        let clock = TestClock()
+        let file = URL(fileURLWithPath: "/tmp/from-finder.pdf")
+        let target = ShelfNotchTarget(
+            displayID: 7,
+            screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            notchFrame: CGRect(x: 676, y: 950, width: 160, height: 32)
+        )
+        let store = TestStore(initialState: ShelvesFeature.State(isDragActive: true)) {
+            ShelvesFeature()
+        } withDependencies: {
+            $0.uuid = .incrementing
+            $0.continuousClock = clock
+        }
+
+        await store.send(.notchItemsDropped(target, [.file(file)])) {
+            $0.shelves.append(
+                ShelfFeature.State(
+                    id: UUID(0),
+                    isPresented: true,
+                    position: CGPoint(
+                        x: target.notchFrame.midX,
+                        y: target.notchFrame.minY - ShelfMetrics.size.height / 2
+                    ),
+                    isDragActive: true
+                )
+            )
+        }
+        await store.receive(
+            .shelves(.element(id: UUID(0), action: .itemsDropped([.file(file)])) )
+        ) {
+            $0.shelves[id: UUID(0)]?.items = [ShelfItem(.file(file))]
+        }
+        await store.receive(
+            .shelves(.element(id: UUID(0), action: .notchDockRequested(target)))
+        ) {
+            $0.shelves[id: UUID(0)]?.notchDock = ShelfNotchDock(
+                target: target,
+                presentation: .attached
+            )
+        }
+        await store.send(
+            .shelves(.element(id: UUID(0), action: .notchUndockRequested))
+        ) {
+            $0.shelves[id: UUID(0)]?.notchDock = nil
+        }
+    }
+
+    @Test func aNotchDropAddsToTheShelfAlreadyStoredOnThatDisplay() async {
+        let clock = TestClock()
+        let target = ShelfNotchTarget(
+            displayID: 7,
+            screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            notchFrame: CGRect(x: 676, y: 950, width: 160, height: 32)
+        )
+        let shelfID = UUID(42)
+        let store = TestStore(
+            initialState: ShelvesFeature.State(shelves: [
+                ShelfFeature.State(
+                    id: shelfID,
+                    items: [ShelfItem(.text("existing"))],
+                    isPresented: true,
+                    notchDock: ShelfNotchDock(target: target, presentation: .stowed)
+                ),
+            ])
+        ) {
+            ShelvesFeature()
+        } withDependencies: {
+            $0.uuid = .incrementing
+            $0.continuousClock = clock
+        }
+
+        await store.send(.notchItemsDropped(target, [.text("new")]))
+        await store.receive(
+            .shelves(.element(id: shelfID, action: .itemsDropped([.text("new")])) )
+        ) {
+            $0.shelves[id: shelfID]?.items.append(ShelfItem(.text("new")))
+        }
+        await store.receive(
+            .shelves(.element(id: shelfID, action: .notchDockRequested(target)))
+        ) {
+            $0.shelves[id: shelfID]?.notchDock?.presentation = .attached
+        }
+        await store.send(
+            .shelves(.element(id: shelfID, action: .notchUndockRequested))
+        ) {
+            $0.shelves[id: shelfID]?.notchDock = nil
+        }
+    }
+
     @Test func menuShowRestoresExistingShelvesWithoutCreatingAnotherOne() async {
         let first = ShelfFeature.State(
             id: UUID(10),

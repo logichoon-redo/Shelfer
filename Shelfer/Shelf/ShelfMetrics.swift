@@ -4,6 +4,7 @@
 //
 
 import CoreGraphics
+import Foundation
 
 /// Shared by the SwiftUI content and the AppKit panel that hosts it, so the
 /// window and the view it contains can't drift apart.
@@ -21,6 +22,7 @@ enum ShelfMetrics {
     /// shelf grows and changes screens as one continuous movement.
     static let expansionAnimationDuration = 0.26
     static let clearAnimationDuration = 0.26
+    static let clearRotationDegrees = -180.0
 }
 
 /// The part of a docked shelf that remains on screen as its return handle.
@@ -29,6 +31,61 @@ enum ShelfDockMetrics {
     static let handleWidth: CGFloat = 33
     static let cornerTargetSize: CGFloat = 52
     static let animationDuration = 0.32
+}
+
+enum ShelfNotchMetrics {
+    static let horizontalCaptureDistance: CGFloat = 70
+    static let verticalCaptureDistance: CGFloat = 72
+    static let dropTargetHorizontalInset: CGFloat = 24
+    static let dropTargetDepth: CGFloat = 18
+    /// Pushes the neck behind the camera housing far enough to fill the display
+    /// pixels exposed by the notch's rounded lower corners.
+    static let notchCornerCoverDepth: CGFloat = 14
+    static let mergeOverlap = notchCornerCoverDepth
+    /// Keeps the merging neck slightly inside the hardware bounds. The camera
+    /// housing's optical edge is tighter than the safe-area rectangle.
+    static let mergeNeckHorizontalInset: CGFloat = 4
+    /// A short black bridge visually joins the material shelf to the camera
+    /// housing. Its top matches the notch exactly, then widens and fades into
+    /// the shelf so neither the border nor the material seam remains visible.
+    static let mergeGradientDepth: CGFloat = 52
+    /// The transparent window leaves enough room for the ambient halo to bloom.
+    static let idleHintDepth: CGFloat = 20
+    static let idleHintHorizontalInset: CGFloat = 66
+
+    /// Extends the luminous surface past the hardware notch so its sides and
+    /// lower edge remain visible while the center sits behind the camera housing.
+    static let ambientWidthExpansion: CGFloat = 45
+    static let ambientHeightExpansion: CGFloat = 7
+    static let ambientHorizontalScale: CGFloat = 0.9
+    static let ambientVerticalScale: CGFloat = 0.5
+    static let peekDepth: CGFloat = 24
+    static let peekHorizontalInset: CGFloat = 8
+    static let peekCornerRadius: CGFloat = 12
+    static let peekHandleTopSpacing: CGFloat = 6
+    static let peekHandleSize = CGSize(width: 28, height: 3)
+    static let hoverProximityHorizontalInset: CGFloat = 18
+    static let hoverProximityDepth: CGFloat = 14
+
+    /// Manual optical alignment for the merge, idle glow, and revealed notch view.
+    /// Positive X moves right; positive Y moves up.
+    static let viewHorizontalOffset: CGFloat = -1
+    static let viewVerticalOffset: CGFloat = 0
+
+    static func mergeNeckWidth(for notchWidth: CGFloat) -> CGFloat {
+        max(0, notchWidth - mergeNeckHorizontalInset * 2)
+    }
+
+    /// Independent optical adjustment for the small gray drag handle.
+    static let handleHorizontalOffset: CGFloat = -4
+    static let pullDistance: CGFloat = 14
+    /// No dwell after attachment: retraction starts as soon as the merge
+    /// animation reaches the camera housing.
+    static let attachmentAnimationDuration: Duration = .seconds(
+        ShelfDockMetrics.animationDuration
+    )
+    static let retractionDuration: TimeInterval = 0.38
+    static let peekAnimationDuration: TimeInterval = 0.52
 }
 
 enum ShelfShareMetrics {

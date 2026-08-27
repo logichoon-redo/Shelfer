@@ -19,24 +19,54 @@ import SwiftUI
 /// closing (`kDragIPC…` reentrancy warnings, and drops that never complete).
 struct ShelfSurface: NSViewRepresentable {
     var onTargetedChange: (Bool) -> Void = { _ in }
+    var onHoverChange: (Bool) -> Void = { _ in }
     var onDrop: ([ShelfItem.Content]) -> Void = { _ in }
 
     func makeNSView(context: Context) -> SurfaceView {
         let view = SurfaceView()
         view.registerForDraggedTypes([.fileURL, .string])
         view.onTargetedChange = onTargetedChange
+        view.onHoverChange = onHoverChange
         view.onDrop = onDrop
         return view
     }
 
     func updateNSView(_ nsView: SurfaceView, context: Context) {
         nsView.onTargetedChange = onTargetedChange
+        nsView.onHoverChange = onHoverChange
         nsView.onDrop = onDrop
     }
 
     final class SurfaceView: NSView {
         var onTargetedChange: (Bool) -> Void = { _ in }
+        var onHoverChange: (Bool) -> Void = { _ in }
         var onDrop: ([ShelfItem.Content]) -> Void = { _ in }
+
+        private var hoverTrackingArea: NSTrackingArea?
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            if let hoverTrackingArea {
+                removeTrackingArea(hoverTrackingArea)
+            }
+
+            let trackingArea = NSTrackingArea(
+                rect: .zero,
+                options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(trackingArea)
+            hoverTrackingArea = trackingArea
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            onHoverChange(true)
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            onHoverChange(false)
+        }
 
         // MARK: - Moving the panel
 
@@ -48,7 +78,11 @@ struct ShelfSurface: NSViewRepresentable {
         }
 
         override func mouseDown(with event: NSEvent) {
-            window?.performDrag(with: event)
+            if let panel = window as? ShelfPanel {
+                panel.performShelfDrag(with: event)
+            } else {
+                window?.performDrag(with: event)
+            }
         }
 
         // MARK: - Receiving drops

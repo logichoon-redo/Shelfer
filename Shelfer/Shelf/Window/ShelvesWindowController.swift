@@ -4,6 +4,7 @@
 //
 
 import ComposableArchitecture
+import AppKit
 import Foundation
 
 /// Maintains one independent panel controller for every shelf in app state.
@@ -12,6 +13,9 @@ final class ShelvesWindowController {
     private let store: StoreOf<ShelvesFeature>
     private var controllers: [ShelfFeature.State.ID: ShelfWindowController] = [:]
     private var isObserving = true
+    private lazy var notchDropController = ShelfNotchDropController { [weak self] target, contents in
+        self?.store.send(.notchItemsDropped(target, contents))
+    }
 
     var managedShelfCount: Int {
         controllers.count
@@ -27,7 +31,9 @@ final class ShelvesWindowController {
 
         withObservationTracking {
             let shelfStores = Array(store.scope(\.shelves, action: \.shelves))
+            let isDragActive = store.isDragActive
             sync(to: shelfStores)
+            notchDropController.setDragActive(isDragActive)
         } onChange: {
             // Observation reports before the collection has applied its change.
             Task { @MainActor [weak self] in self?.observe() }
@@ -48,6 +54,7 @@ final class ShelvesWindowController {
 
     func invalidate() {
         isObserving = false
+        notchDropController.invalidate()
         controllers.values.forEach { $0.invalidate() }
         controllers.removeAll()
     }

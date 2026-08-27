@@ -35,6 +35,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 .shelves(.element(id: shelfID, action: .itemsDropped(contents)))
             )
 
+            if ProcessInfo.processInfo.environment["Shelfer_DEBUG_NOTCH"] != nil,
+               let target = ShelfNotchGeometry.targets().first {
+                store.send(
+                    .shelves(.element(id: shelfID, action: .notchDockRequested(target)))
+                )
+            }
+
             if ProcessInfo.processInfo.environment["Shelfer_DEBUG_EXPAND"] != nil {
                 store.send(
                     .shelves(.element(id: shelfID, action: .expandButtonTapped))

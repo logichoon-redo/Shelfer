@@ -253,6 +253,79 @@ struct ShelfFeatureTests {
         #expect(store.state.items == [item])
     }
 
+    // MARK: - Notch docking
+
+    @Test func notchDockRetractsAsSoonAsTheMergeAnimationFinishes() async {
+        let clock = TestClock()
+        let target = ShelfNotchTarget(
+            displayID: 7,
+            screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            notchFrame: CGRect(x: 676, y: 950, width: 160, height: 32)
+        )
+        let store = TestStore(initialState: ShelfFeature.State(isPresented: true)) {
+            ShelfFeature()
+        } withDependencies: {
+            $0.continuousClock = clock
+        }
+
+        await store.send(.notchDockRequested(target)) {
+            $0.notchDock = ShelfNotchDock(target: target, presentation: .attached)
+        }
+
+        await clock.advance(by: ShelfNotchMetrics.attachmentAnimationDuration)
+        await store.receive(.notchAttachmentFinished) {
+            $0.notchDock?.presentation = .retracting
+        }
+
+        await clock.advance(by: .seconds(ShelfNotchMetrics.retractionDuration))
+        await store.receive(.notchRetractionFinished) {
+            $0.notchDock?.presentation = .stowed
+        }
+    }
+
+    @Test func hoveringRevealsAStowedNotchHandleAndPullingRestoresIt() async {
+        let target = ShelfNotchTarget(
+            displayID: 7,
+            screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            notchFrame: CGRect(x: 676, y: 950, width: 160, height: 32)
+        )
+        let store = makeStore(
+            ShelfFeature.State(
+                isPresented: true,
+                notchDock: ShelfNotchDock(target: target, presentation: .stowed)
+            )
+        )
+
+        await store.send(.notchHoverChanged(true)) {
+            $0.notchDock?.presentation = .peeking
+        }
+        await store.send(.notchHoverChanged(false)) {
+            $0.notchDock?.presentation = .stowed
+        }
+        await store.send(.notchUndockRequested) {
+            $0.notchDock = nil
+        }
+    }
+
+    @Test func sideDockingAndNotchDockingAreMutuallyExclusive() async {
+        let target = ShelfNotchTarget(
+            displayID: 7,
+            screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            notchFrame: CGRect(x: 676, y: 950, width: 160, height: 32)
+        )
+        let store = makeStore(
+            ShelfFeature.State(
+                isPresented: true,
+                notchDock: ShelfNotchDock(target: target, presentation: .stowed)
+            )
+        )
+
+        await store.send(.dockRequested(.right)) {
+            $0.dockedEdge = .right
+            $0.notchDock = nil
+        }
+    }
+
     // MARK: - Detail view
 
     @Test func tappingTheLabelExpandsTheShelf() async {

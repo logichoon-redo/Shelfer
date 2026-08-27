@@ -15,6 +15,10 @@ final class ShelfWindowController {
     private var panel: ShelfPanel?
     private var isObserving = true
 
+#if DEBUG
+    var panelForTesting: ShelfPanel? { panel }
+#endif
+
     /// The position already applied to the panel, so a state change that isn't a
     /// fresh summon (a file landing, say) doesn't undo a manual window move.
     private var appliedPosition: CGPoint?
@@ -22,8 +26,15 @@ final class ShelfWindowController {
     /// Docking is a window concern: the reducer records the selected edge while
     /// this controller keeps the exact manual frame to which it should return.
     private var appliedDockEdge: ShelfDockEdge?
+    private var appliedNotchDock: ShelfNotchDock?
     private var undockedFrame: CGRect?
     private var dockedScreen: NSScreen?
+    private var pendingNotchRestorePoint: CGPoint?
+    private var didUndockNotchDuringCurrentDrag = false
+    private var notchHoverTask: Task<Void, Never>?
+    private var notchHoverWatchID: UUID?
+    private var notchStowResizeTask: Task<Void, Never>?
+    private var notchStowResizeID: UUID?
 
     init(store: StoreOf<ShelfFeature>) {
         self.store = store
@@ -39,6 +50,7 @@ final class ShelfWindowController {
                 isPresented: store.isPresented,
                 position: store.position,
                 dockedEdge: store.dockedEdge,
+                notchDock: store.notchDock,
                 shelfSize: shelfSize,
                 panelSize: ShelfShareMetrics.panelSize(for: shelfSize)
             )
@@ -53,6 +65,9 @@ final class ShelfWindowController {
     /// collection.
     func invalidate() {
         isObserving = false
+        cancelNotchHoverWatch()
+        cancelNotchStowResize()
+        panel?.cancelUserDragTracking()
         panel?.orderOut(nil)
         panel?.contentView = nil
         panel = nil
@@ -62,15 +77,26 @@ final class ShelfWindowController {
         isPresented: Bool,
         position: CGPoint?,
         dockedEdge: ShelfDockEdge?,
+        notchDock: ShelfNotchDock?,
         shelfSize: CGSize,
         panelSize: CGSize
     ) {
         guard isPresented else {
+            cancelNotchHoverWatch()
+            cancelNotchStowResize()
+            panel?.level = .floating
+            panel?.ignoresMouseEvents = false
+            if let panel {
+                setShelfBackgroundVisible(true, in: panel)
+                setShelfBackgroundNotchWidth(nil, in: panel)
+            }
             panel?.orderOut(nil)
             appliedPosition = nil
             appliedDockEdge = nil
+            appliedNotchDock = nil
             undockedFrame = nil
             dockedScreen = nil
+            pendingNotchRestorePoint = nil
             return
         }
 
@@ -78,9 +104,10 @@ final class ShelfWindowController {
         self.panel = panel
 
         let hasFreshPosition = position.map { $0 != appliedPosition } ?? false
-        if let position, hasFreshPosition {
+        if let position, hasFreshPosition, dockedEdge == nil, notchDock == nil {
             appliedPosition = position
             appliedDockEdge = nil
+            appliedNotchDock = nil
             undockedFrame = nil
             dockedScreen = nil
 
@@ -95,6 +122,22 @@ final class ShelfWindowController {
                 display: true,
                 animate: false
             )
+        }
+
+        if let notchDock {
+            // A shelf created by dropping directly on the notch has never had
+            // its ordinary position applied. Still mark that initial position
+            // as observed: otherwise the first undock mistakes it for a fresh
+            // summon, clears `appliedNotchDock`, and skips `restoreFromNotch`
+            // (including its material/background and window-level reset).
+            appliedPosition = position
+            syncNotchDock(panel, to: notchDock, fullPanelSize: panelSize)
+            panel.orderFrontRegardless()
+            return
+        }
+
+        if appliedNotchDock != nil {
+            restoreFromNotch(panel, fullPanelSize: panelSize, shelfSize: shelfSize)
         } else if appliedDockEdge == nil {
             resize(panel, to: panelSize)
         } else if panel.frame.size != panelSize, let edge = appliedDockEdge {
@@ -103,6 +146,261 @@ final class ShelfWindowController {
 
         syncDocking(panel, to: dockedEdge, panelSize: panelSize)
         panel.orderFrontRegardless()
+    }
+
+    private func syncNotchDock(
+        _ panel: ShelfPanel,
+        to notchDock: ShelfNotchDock,
+        fullPanelSize: CGSize
+    ) {
+        let previousPresentation = appliedNotchDock?.presentation
+
+        if appliedNotchDock == nil {
+            if appliedDockEdge == nil {
+                undockedFrame = panel.frame
+            }
+            appliedDockEdge = nil
+            dockedScreen = screen(containing: notchDock.target.notchFrame)
+        }
+
+        appliedNotchDock = notchDock
+        if notchDock.presentation != .stowed {
+            cancelNotchStowResize()
+        }
+        panel.level = .statusBar
+        panel.ignoresMouseEvents = notchDock.presentation == .stowed
+        syncNotchHoverWatch(for: notchDock, in: panel)
+        setShelfBackgroundVisible(
+            notchDock.presentation == .attached || notchDock.presentation == .retracting,
+            in: panel
+        )
+        setShelfBackgroundNotchWidth(
+            notchDock.presentation == .attached || notchDock.presentation == .retracting
+                ? ShelfNotchMetrics.mergeNeckWidth(
+                    for: notchDock.target.notchFrame.width
+                )
+                : nil,
+            in: panel
+        )
+
+        let targetFrame = notchFrame(for: notchDock, fullPanelSize: fullPanelSize)
+        guard panel.frame != targetFrame else { return }
+
+        switch notchDock.presentation {
+        case .attached:
+            animate(panel, to: targetFrame, duration: ShelfDockMetrics.animationDuration)
+        case .retracting:
+            animate(panel, to: targetFrame, duration: ShelfNotchMetrics.retractionDuration)
+        case .stowed:
+            if notchStowResizeTask != nil {
+                return
+            }
+
+            if previousPresentation == .peeking,
+               !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+                scheduleNotchStowResize(panel, to: targetFrame)
+            } else {
+                // Retraction has already put the complete shelf behind the
+                // camera housing, so this state needs no additional delay.
+                panel.setFrame(targetFrame, display: true, animate: false)
+            }
+        case .peeking:
+            animate(panel, to: targetFrame, duration: ShelfNotchMetrics.peekAnimationDuration)
+        }
+    }
+
+    private func restoreFromNotch(
+        _ panel: ShelfPanel,
+        fullPanelSize: CGSize,
+        shelfSize: CGSize
+    ) {
+        cancelNotchHoverWatch()
+        cancelNotchStowResize()
+        let notchScreen = appliedNotchDock.map { screen(containing: $0.target.notchFrame) }
+            ?? dockedScreen
+            ?? screen(containing: panel.frame)
+        let target: CGRect
+
+        if let point = pendingNotchRestorePoint {
+            target = CGRect(
+                origin: originClamped(
+                    for: point,
+                    shelfSize: shelfSize,
+                    panelSize: fullPanelSize,
+                    on: screen(containing: point)
+                ),
+                size: fullPanelSize
+            )
+        } else {
+            target = restoredFrame(size: fullPanelSize, on: notchScreen)
+        }
+
+        panel.level = .floating
+        panel.ignoresMouseEvents = false
+        setShelfBackgroundVisible(true, in: panel)
+        setShelfBackgroundNotchWidth(nil, in: panel)
+        appliedNotchDock = nil
+        appliedDockEdge = nil
+        pendingNotchRestorePoint = nil
+        undockedFrame = nil
+        dockedScreen = nil
+
+        if panel.isUserDragging {
+            panel.setFrame(target, display: true, animate: false)
+        } else {
+            animate(panel, to: target, duration: ShelfDockMetrics.animationDuration)
+        }
+    }
+
+    /// The physical camera housing is not an ordinary display region, so a
+    /// window hidden behind it cannot rely on AppKit mouse-enter events. The
+    /// same pointer watch also covers mouse-exit events lost during frame
+    /// animation, making both reveal and retraction deterministic.
+    private func syncNotchHoverWatch(
+        for notchDock: ShelfNotchDock,
+        in panel: ShelfPanel
+    ) {
+        guard notchDock.presentation == .stowed || notchDock.presentation == .peeking else {
+            cancelNotchHoverWatch()
+            return
+        }
+        guard notchHoverTask == nil else { return }
+
+        let watchID = UUID()
+        notchHoverWatchID = watchID
+        notchHoverTask = Task { @MainActor [weak self, weak panel] in
+            defer {
+                if self?.notchHoverWatchID == watchID {
+                    self?.notchHoverTask = nil
+                    self?.notchHoverWatchID = nil
+                }
+            }
+
+            while let self, let panel, !Task.isCancelled,
+                  let currentDock = self.store.notchDock,
+                  currentDock.presentation == .stowed || currentDock.presentation == .peeking {
+                guard !panel.isUserDragging else {
+                    try? await Task.sleep(for: .milliseconds(40))
+                    continue
+                }
+
+                let pointer = NSEvent.mouseLocation
+                switch currentDock.presentation {
+                case .stowed:
+                    let notch = currentDock.target.notchFrame
+                    let triggerFrame = CGRect(
+                        x: notch.minX - ShelfNotchMetrics.hoverProximityHorizontalInset,
+                        y: notch.minY - ShelfNotchMetrics.hoverProximityDepth,
+                        width: notch.width + ShelfNotchMetrics.hoverProximityHorizontalInset * 2,
+                        height: notch.height + ShelfNotchMetrics.hoverProximityDepth
+                    )
+                    if triggerFrame.contains(pointer) {
+                        self.store.send(.notchHoverChanged(true))
+                    }
+
+                case .peeking:
+                    let interactionFrame = panel.frame.insetBy(dx: -4, dy: -4)
+                    if !interactionFrame.contains(pointer) {
+                        self.store.send(.notchHoverChanged(false))
+                    }
+
+                case .attached, .retracting:
+                    return
+                }
+
+                try? await Task.sleep(for: .milliseconds(40))
+            }
+        }
+    }
+
+    private func cancelNotchHoverWatch() {
+        notchHoverTask?.cancel()
+        notchHoverTask = nil
+        notchHoverWatchID = nil
+    }
+
+    /// Keeps the small peeking panel stationary until SwiftUI has finished
+    /// removing its handle. Resizing to the wider ambient panel any earlier
+    /// changes the outgoing view's coordinate space and makes it jump left.
+    private func scheduleNotchStowResize(_ panel: ShelfPanel, to frame: CGRect) {
+        cancelNotchStowResize()
+
+        let resizeID = UUID()
+        notchStowResizeID = resizeID
+        notchStowResizeTask = Task { @MainActor [weak self, weak panel] in
+            try? await Task.sleep(
+                for: .seconds(ShelfNotchMetrics.peekAnimationDuration)
+            )
+
+            guard !Task.isCancelled,
+                  let self,
+                  let panel,
+                  self.notchStowResizeID == resizeID,
+                  self.store.notchDock?.presentation == .stowed else { return }
+
+            panel.setFrame(frame, display: true, animate: false)
+            self.notchStowResizeTask = nil
+            self.notchStowResizeID = nil
+        }
+    }
+
+    private func cancelNotchStowResize() {
+        notchStowResizeTask?.cancel()
+        notchStowResizeTask = nil
+        notchStowResizeID = nil
+    }
+
+    private func notchFrame(
+        for notchDock: ShelfNotchDock,
+        fullPanelSize: CGSize
+    ) -> CGRect {
+        let target = notchDock.target
+
+        switch notchDock.presentation {
+        case .attached:
+            return CGRect(
+                x: target.notchFrame.midX
+                    - fullPanelSize.width / 2
+                    + ShelfNotchMetrics.viewHorizontalOffset,
+                y: target.notchFrame.minY + ShelfNotchMetrics.mergeOverlap - fullPanelSize.height,
+                width: fullPanelSize.width,
+                height: fullPanelSize.height
+            )
+
+        case .retracting:
+            return CGRect(
+                x: target.notchFrame.midX
+                    - fullPanelSize.width / 2
+                    + ShelfNotchMetrics.viewHorizontalOffset,
+                y: target.notchFrame.minY,
+                width: fullPanelSize.width,
+                height: fullPanelSize.height
+            )
+
+        case .stowed:
+            return ShelfNotchGeometry.ambientFrame(for: target)
+
+        case .peeking:
+            let width = target.notchFrame.width + ShelfNotchMetrics.peekHorizontalInset * 2
+            return CGRect(
+                x: target.notchFrame.midX
+                    - width / 2
+                    + ShelfNotchMetrics.viewHorizontalOffset,
+                y: target.notchFrame.minY
+                    - ShelfNotchMetrics.peekDepth
+                    + ShelfNotchMetrics.viewVerticalOffset,
+                width: width,
+                height: target.notchFrame.height + ShelfNotchMetrics.peekDepth
+            )
+        }
+    }
+
+    private func setShelfBackgroundVisible(_ isVisible: Bool, in panel: ShelfPanel) {
+        (panel.contentView as? ShelfPanelRootView)?.showsShelfBackground = isVisible
+    }
+
+    private func setShelfBackgroundNotchWidth(_ width: CGFloat?, in panel: ShelfPanel) {
+        (panel.contentView as? ShelfPanelRootView)?.notchMergeWidth = width
     }
 
     private func syncDocking(
@@ -194,6 +492,10 @@ final class ShelfWindowController {
         let panel = ShelfPanel(contentRect: NSRect(origin: .zero, size: panelSize))
         let root = ShelfPanelRootView(frame: NSRect(origin: .zero, size: panelSize))
         let hosting = NSHostingView(rootView: ShelfPanelContentView(store: store))
+        // This controller is the sole owner of panel geometry. Allowing the
+        // hosting view to propagate a transition's intrinsic size back to its
+        // window can shift the panel while the notch handle is disappearing.
+        hosting.sizingOptions = []
         hosting.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(hosting)
         NSLayoutConstraint.activate([
@@ -203,7 +505,90 @@ final class ShelfWindowController {
             hosting.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
         panel.contentView = root
+        panel.onUserDragBegan = { [weak self] in
+            self?.userDragBegan()
+        }
+        panel.onUserDragMoved = { [weak self] in
+            self?.userDragMoved()
+        }
+        panel.onUserDragEnded = { [weak self] point in
+            self?.userDragEnded(at: point)
+        }
         return panel
+    }
+
+    private func userDragBegan() {
+        guard let notchDock = store.notchDock else { return }
+
+        switch notchDock.presentation {
+        case .attached, .retracting:
+            didUndockNotchDuringCurrentDrag = true
+            pendingNotchRestorePoint = NSEvent.mouseLocation
+            store.send(.notchUndockRequested)
+        case .stowed, .peeking:
+            break
+        }
+    }
+
+    private func userDragMoved() {
+        guard let notchDock = store.notchDock else { return }
+
+        let point = NSEvent.mouseLocation
+        guard wasPulledFromNotch(at: point, notchDock: notchDock) else { return }
+
+        didUndockNotchDuringCurrentDrag = true
+        pendingNotchRestorePoint = point
+        store.send(.notchUndockRequested)
+    }
+
+    private func userDragEnded(at point: CGPoint) {
+        if didUndockNotchDuringCurrentDrag {
+            didUndockNotchDuringCurrentDrag = false
+            return
+        }
+
+        if let notchDock = store.notchDock, let panel {
+            // `NSWindow.performDrag(with:)` may hold the event-tracking loop
+            // until mouse-up, so the final pointer is also authoritative. This
+            // keeps pull-to-restore working even when no intermediate callback
+            // was scheduled during the Window Server drag.
+            if wasPulledFromNotch(at: point, notchDock: notchDock) {
+                pendingNotchRestorePoint = point
+                store.send(.notchUndockRequested)
+                return
+            }
+
+            // A click or a very short pull remains docked. Return its hit target
+            // precisely to the camera housing after Window Server movement.
+            let fullSize = ShelfShareMetrics.panelSize(for: ShelfMetrics.size)
+            let target = notchFrame(for: notchDock, fullPanelSize: fullSize)
+            animate(panel, to: target, duration: ShelfNotchMetrics.peekAnimationDuration)
+            return
+        }
+
+        guard store.dockedEdge == nil, let panel else { return }
+        let materialFrame = CGRect(
+            x: panel.frame.minX,
+            y: panel.frame.minY + ShelfShareMetrics.footerHeight,
+            width: panel.frame.width,
+            height: max(0, panel.frame.height - ShelfShareMetrics.footerHeight)
+        )
+        guard let target = ShelfNotchGeometry.target(accepting: materialFrame) else { return }
+
+        undockedFrame = panel.frame
+        dockedScreen = screen(containing: target.notchFrame)
+        store.send(.notchDockRequested(target))
+    }
+
+    private func wasPulledFromNotch(
+        at point: CGPoint,
+        notchDock: ShelfNotchDock
+    ) -> Bool {
+        let notch = notchDock.target.notchFrame
+        let wasPulledDown = point.y < notch.minY - ShelfNotchMetrics.pullDistance
+        let wasPulledSideways = abs(point.x - notch.midX)
+            > notch.width / 2 + ShelfNotchMetrics.pullDistance
+        return wasPulledDown || wasPulledSideways
     }
 
     private func screen(containing point: CGPoint) -> NSScreen {

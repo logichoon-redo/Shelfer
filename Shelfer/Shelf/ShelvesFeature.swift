@@ -4,6 +4,7 @@
 //
 
 import ComposableArchitecture
+import CoreGraphics
 import Foundation
 
 /// Owns the set of independent shelves and the one system-wide drag monitor.
@@ -30,6 +31,7 @@ struct ShelvesFeature {
         case dragActivityChanged(Bool)
         case shelfRequested(CGPoint)
         case showRequested(CGPoint)
+        case notchItemsDropped(ShelfNotchTarget, [ShelfItem.Content])
         case dragEnded
         case shelves(IdentifiedActionOf<ShelfFeature>)
         case removeShelf(ShelfFeature.State.ID)
@@ -102,6 +104,36 @@ struct ShelvesFeature {
                 }
                 return .none
 
+            case let .notchItemsDropped(target, contents):
+                guard !contents.isEmpty else { return .none }
+
+                if let shelfID = state.shelves.first(where: {
+                    $0.notchDock?.target.displayID == target.displayID
+                })?.id {
+                    state.shelves[id: shelfID]?.isPresented = true
+                    return .concatenate(
+                        .send(.shelves(.element(id: shelfID, action: .itemsDropped(contents)))),
+                        .send(.shelves(.element(id: shelfID, action: .notchDockRequested(target))))
+                    )
+                }
+
+                let shelfID = uuid()
+                state.shelves.append(
+                    ShelfFeature.State(
+                        id: shelfID,
+                        isPresented: true,
+                        position: CGPoint(
+                            x: target.notchFrame.midX,
+                            y: target.notchFrame.minY - ShelfMetrics.size.height / 2
+                        ),
+                        isDragActive: state.isDragActive
+                    )
+                )
+                return .concatenate(
+                    .send(.shelves(.element(id: shelfID, action: .itemsDropped(contents)))),
+                    .send(.shelves(.element(id: shelfID, action: .notchDockRequested(target))))
+                )
+
             case .dragEnded:
                 state.isDragActive = false
                 for id in state.shelves.ids {
@@ -143,6 +175,7 @@ struct ShelvesFeature {
                 for id in state.shelves.ids {
                     state.shelves[id: id]?.isPresented = false
                     state.shelves[id: id]?.dockedEdge = nil
+                    state.shelves[id: id]?.notchDock = nil
                 }
                 return .none
             }

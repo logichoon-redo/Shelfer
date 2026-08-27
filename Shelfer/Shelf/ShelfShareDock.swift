@@ -10,28 +10,275 @@ import SwiftUI
 struct ShelfPanelContentView: View {
     let store: StoreOf<ShelfFeature>
 
+    @ViewBuilder
     var body: some View {
-        VStack(spacing: ShelfShareMetrics.gap) {
-            ShelfView(store: store)
-                .frame(maxWidth: .infinity)
-                .frame(height: shelfSize.height)
+        if let notchDock = store.notchDock,
+           notchDock.presentation == .stowed || notchDock.presentation == .peeking {
+            ShelfNotchHandleView(store: store, notchDock: notchDock)
+        } else {
+            VStack(spacing: ShelfShareMetrics.gap) {
+                ShelfView(store: store)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: shelfSize.height)
+                    .overlay(alignment: .top) {
+                        if let notchDock = store.notchDock,
+                           notchDock.presentation == .attached
+                               || notchDock.presentation == .retracting {
+                            ShelfNotchMergeBridge(
+                                notchWidth: ShelfNotchMetrics.mergeNeckWidth(
+                                    for: notchDock.target.notchFrame.width
+                                ),
+                                shelfWidth: shelfSize.width
+                            )
+                        }
+                    }
 
-            if store.dockedEdge == nil {
-                ShelfShareDock(store: store)
-                    .frame(
-                        width: ShelfShareMetrics.dockSize.width,
-                        height: ShelfShareMetrics.dockSize.height
-                    )
-            } else {
-                Color.clear
-                    .frame(height: ShelfShareMetrics.dockSize.height)
+                if store.dockedEdge == nil {
+                    ShelfShareDock(store: store)
+                        .frame(
+                            width: ShelfShareMetrics.dockSize.width,
+                            height: ShelfShareMetrics.dockSize.height
+                        )
+                } else {
+                    Color.clear
+                        .frame(height: ShelfShareMetrics.dockSize.height)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var shelfSize: CGSize {
         store.isExpanded ? ShelfDetailMetrics.size : ShelfMetrics.size
+    }
+}
+
+/// Covers the material and border seam while the complete shelf is joined to
+/// the camera housing. The bridge begins at the physical notch's exact width,
+/// flares into the shelf, and fades vertically so the two read as one object as
+/// the shelf is pulled upward.
+private struct ShelfNotchMergeBridge: View {
+    let notchWidth: CGFloat
+    let shelfWidth: CGFloat
+
+    var body: some View {
+        ShelfNotchMergeShape(notchWidth: notchWidth)
+        .fill(
+            LinearGradient(
+                stops: [
+                    .init(color: .black, location: 0),
+                    // Stay fully black through the hardware notch's rounded
+                    // lower corners. Fading sooner exposes two detached-looking
+                    // material tips on either side of the camera housing.
+                    .init(color: .black, location: solidBlackStop),
+                    .init(color: .black.opacity(0.76), location: 0.5),
+                    .init(color: .black.opacity(0.28), location: 0.74),
+                    .init(color: .clear, location: 1),
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+        )
+        .frame(
+            width: shelfWidth,
+            height: ShelfNotchMetrics.mergeGradientDepth
+        )
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private var solidBlackStop: CGFloat {
+        min(
+            0.45,
+            ShelfNotchMetrics.notchCornerCoverDepth
+                / ShelfNotchMetrics.mergeGradientDepth
+        )
+    }
+}
+
+/// Its top edge is exactly as wide as the notch. The curved shoulders widen
+/// immediately below that edge, masking the shelf's rounded material beneath
+/// the hardware before the fill becomes transparent.
+private struct ShelfNotchMergeShape: Shape {
+    let notchWidth: CGFloat
+
+    func path(in rect: CGRect) -> Path {
+        Path(
+            ShelfNotchSilhouettePath.makeNeck(
+                in: rect,
+                notchWidth: notchWidth,
+                topEdgeAtMinY: true
+            )
+        )
+    }
+}
+
+/// Lives inside the camera-housing-sized panel while a shelf is stowed. The
+/// black cap is physically hidden at rest; hovering the notch extends its lower
+/// edge and reveals the handle that can be pulled back into a complete shelf.
+private struct ShelfNotchHandleView: View {
+    let store: StoreOf<ShelfFeature>
+    let notchDock: ShelfNotchDock
+
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @State private var isDropTargeted = false
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            if notchDock.presentation == .stowed {
+                ShelfNotchAmbientLight(notchSize: notchDock.target.notchFrame.size)
+                    .transition(.opacity)
+            } else {
+                peekHandle
+                    .transition(
+                        .move(edge: .top)
+                            .combined(with: .opacity)
+                    )
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(peekAnimation, value: notchDock.presentation)
+    }
+
+    private var peekHandle: some View {
+        ZStack {
+            UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: ShelfNotchMetrics.peekCornerRadius,
+                bottomTrailingRadius: ShelfNotchMetrics.peekCornerRadius,
+                topTrailingRadius: 0,
+                style: .continuous
+            )
+            .fill(Color.black.opacity(0.96))
+            .overlay {
+                UnevenRoundedRectangle(
+                    topLeadingRadius: 0,
+                    bottomLeadingRadius: ShelfNotchMetrics.peekCornerRadius,
+                    bottomTrailingRadius: ShelfNotchMetrics.peekCornerRadius,
+                    topTrailingRadius: 0,
+                    style: .continuous
+                )
+                .strokeBorder(
+                    isDropTargeted ? Color.accentColor : Color.white.opacity(0.13),
+                    lineWidth: isDropTargeted ? 2 : 1
+                )
+            }
+
+            VStack(spacing: 0) {
+                Color.clear
+                    .frame(
+                        height: notchDock.target.notchFrame.height
+                            + ShelfNotchMetrics.peekHandleTopSpacing
+                    )
+
+                Capsule()
+                    .fill(.white.opacity(0.42))
+                    .frame(
+                        width: ShelfNotchMetrics.peekHandleSize.width,
+                        height: ShelfNotchMetrics.peekHandleSize.height
+                    )
+                    .offset(x: ShelfNotchMetrics.handleHorizontalOffset)
+
+                Spacer(minLength: 0)
+            }
+
+            ShelfSurface(
+                onTargetedChange: { isDropTargeted = $0 },
+                onDrop: { contents in
+                    store.send(.itemsDropped(contents))
+                    store.send(.notchDockRequested(notchDock.target))
+                }
+            )
+        }
+        // Keep the disappearing handle independent from the wider ambient
+        // window. When hover ends that window snaps back to its idle size; a
+        // flexible handle would briefly adopt the new leading edge and appear
+        // to jump left before its removal transition finished.
+        .frame(width: peekPanelSize.width, height: peekPanelSize.height)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Stowed shelf")
+        .accessibilityHint("Drag down to restore the shelf")
+    }
+
+    private var peekPanelSize: CGSize {
+        CGSize(
+            width: notchDock.target.notchFrame.width
+                + ShelfNotchMetrics.peekHorizontalInset * 2,
+            height: notchDock.target.notchFrame.height
+                + ShelfNotchMetrics.peekDepth
+        )
+    }
+
+    private var peekAnimation: Animation? {
+        guard !accessibilityReduceMotion else { return nil }
+        return .easeInOut(duration: ShelfNotchMetrics.peekAnimationDuration)
+    }
+}
+
+/// A quiet affordance that remains after the shelf has disappeared into the
+/// camera housing. It deliberately contains no drag handle; the full handle is
+/// revealed only when the pointer reaches the notch's proximity region.
+struct ShelfNotchAmbientLight: View {
+    let notchSize: CGSize
+
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @State private var isGlowing = false
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            Color.clear
+
+            notchOutline
+                .fill(Color.blue.opacity(isGlowing ? 0.48 : 0.22))
+                .frame(width: ambientSize.width, height: ambientRenderHeight)
+                .blur(radius: isGlowing ? 22 : 14)
+                .scaleEffect(
+                    x: ShelfNotchMetrics.ambientHorizontalScale,
+                    y: ShelfNotchMetrics.ambientVerticalScale,
+                    anchor: .top
+                )
+                .frame(
+                    width: ambientSize.width,
+                    height: ambientSize.height,
+                    alignment: .top
+                )
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            guard !accessibilityReduceMotion else {
+                isGlowing = true
+                return
+            }
+            withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {
+                isGlowing = true
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var notchOutline: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(
+            topLeadingRadius: 0,
+            bottomLeadingRadius: 22,
+            bottomTrailingRadius: 22,
+            topTrailingRadius: 0,
+            style: .continuous
+        )
+    }
+
+    private var ambientSize: CGSize {
+        CGSize(
+            width: notchSize.width
+                + ShelfNotchMetrics.ambientWidthExpansion,
+            height: notchSize.height
+                + ShelfNotchMetrics.ambientHeightExpansion
+        )
+    }
+
+    /// Pre-compensates the source height so scaling compresses the glow and its
+    /// blur without also swallowing the portion meant to remain below the notch.
+    private var ambientRenderHeight: CGFloat {
+        ambientSize.height / ShelfNotchMetrics.ambientVerticalScale
     }
 }
 

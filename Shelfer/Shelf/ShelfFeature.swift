@@ -27,6 +27,10 @@ struct ShelfFeature {
         /// window controller retains its exact undocked frame for restoration.
         var dockedEdge: ShelfDockEdge?
 
+        /// Present only on a display whose safe area reports a camera housing.
+        /// The presentation phase drives the merge, retraction, and hover peek.
+        var notchDock: ShelfNotchDock?
+
         /// True only while the pointer is carrying an active drag payload.
         /// Drag-only controls stay completely hidden at every other time.
         var isDragActive = false
@@ -71,6 +75,11 @@ struct ShelfFeature {
         case shelfDragActivityChanged(Bool)
         case dockRequested(ShelfDockEdge)
         case undockRequested
+        case notchDockRequested(ShelfNotchTarget)
+        case notchAttachmentFinished
+        case notchRetractionFinished
+        case notchHoverChanged(Bool)
+        case notchUndockRequested
         case itemsDropped([ShelfItem.Content])
         case itemsDraggedOut([ShelfItem.Content])
         case closeButtonTapped
@@ -102,6 +111,7 @@ struct ShelfFeature {
     private nonisolated enum CancelID {
         case clearAnimation
         case copyFeedback
+        case notchLifecycle
     }
 
     var body: some Reducer<State, Action> {
@@ -118,11 +128,52 @@ struct ShelfFeature {
             case let .dockRequested(edge):
                 guard state.isPresented else { return .none }
                 state.dockedEdge = edge
-                return .none
+                state.notchDock = nil
+                return .cancel(id: CancelID.notchLifecycle)
 
             case .undockRequested:
                 state.dockedEdge = nil
                 return .none
+
+            case let .notchDockRequested(target):
+                guard state.isPresented else { return .none }
+                state.dockedEdge = nil
+                state.isExpanded = false
+                state.notchDock = ShelfNotchDock(target: target, presentation: .attached)
+                return .run { send in
+                    try await clock.sleep(for: ShelfNotchMetrics.attachmentAnimationDuration)
+                    await send(.notchAttachmentFinished)
+                }
+                .cancellable(id: CancelID.notchLifecycle, cancelInFlight: true)
+
+            case .notchAttachmentFinished:
+                guard state.notchDock?.presentation == .attached else { return .none }
+                state.notchDock?.presentation = .retracting
+                return .run { send in
+                    try await clock.sleep(for: .seconds(ShelfNotchMetrics.retractionDuration))
+                    await send(.notchRetractionFinished)
+                }
+                .cancellable(id: CancelID.notchLifecycle, cancelInFlight: true)
+
+            case .notchRetractionFinished:
+                guard state.notchDock?.presentation == .retracting else { return .none }
+                state.notchDock?.presentation = .stowed
+                return .none
+
+            case let .notchHoverChanged(isHovering):
+                switch (state.notchDock?.presentation, isHovering) {
+                case (.stowed, true):
+                    state.notchDock?.presentation = .peeking
+                case (.peeking, false):
+                    state.notchDock?.presentation = .stowed
+                default:
+                    break
+                }
+                return .none
+
+            case .notchUndockRequested:
+                state.notchDock = nil
+                return .cancel(id: CancelID.notchLifecycle)
 
             case let .itemsDropped(contents):
                 let interruptedClear = state.isClearing
@@ -151,8 +202,9 @@ struct ShelfFeature {
                     state.isExpanded = false
                     state.showsEmptyCloseButton = false
                     state.dockedEdge = nil
+                    state.notchDock = nil
                 }
-                return .none
+                return state.isEmpty ? .cancel(id: CancelID.notchLifecycle) : .none
 
             case .closeButtonTapped:
                 state.items.removeAll()
@@ -161,7 +213,11 @@ struct ShelfFeature {
                 state.isClearing = false
                 state.showsEmptyCloseButton = false
                 state.dockedEdge = nil
-                return .cancel(id: CancelID.clearAnimation)
+                state.notchDock = nil
+                return .merge(
+                    .cancel(id: CancelID.clearAnimation),
+                    .cancel(id: CancelID.notchLifecycle)
+                )
 
             case .clearButtonTapped:
                 guard !state.isEmpty, !state.isClearing else { return .none }
@@ -235,7 +291,8 @@ struct ShelfFeature {
             case .hideRequested:
                 state.isPresented = false
                 state.dockedEdge = nil
-                return .none
+                state.notchDock = nil
+                return .cancel(id: CancelID.notchLifecycle)
             }
         }
     }

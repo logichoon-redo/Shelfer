@@ -72,13 +72,21 @@ struct ShelfView: View {
     }
 
     private var border: some View {
-        let shape = RoundedRectangle(cornerRadius: ShelfMetrics.cornerRadius, style: .continuous)
-        return shape
+        ShelfBorderShape(notchWidth: mergingNotchWidth)
             .strokeBorder(
                 isTargeted ? Color.accentColor : Color.white.opacity(0.14),
                 lineWidth: isTargeted ? 3 : 1
             )
             .allowsHitTesting(false)
+    }
+
+    private var mergingNotchWidth: CGFloat? {
+        guard let notchDock = store.notchDock,
+              notchDock.presentation == .attached
+                  || notchDock.presentation == .retracting else { return nil }
+        return ShelfNotchMetrics.mergeNeckWidth(
+            for: notchDock.target.notchFrame.width
+        )
     }
 
     private var dockCornerTargets: some View {
@@ -229,6 +237,9 @@ struct ShelfView: View {
 
                     icon(for: item)
                         .rotationEffect(.degrees(isTop ? 0 : index == 0 ? -7 : 5))
+                        .rotationEffect(
+                            .degrees(store.isClearing ? ShelfMetrics.clearRotationDegrees : 0)
+                        )
                         .offset(x: isTop ? 0 : index == 0 ? -6 : 6, y: isTop ? 0 : 3)
                         .opacity(isTop ? 1 : 0.65)
                         .zIndex(Double(index))
@@ -288,6 +299,44 @@ struct ShelfView: View {
 
     private var labelHelpText: String {
         store.items.map(\.displayName).joined(separator: "\n")
+    }
+}
+
+private struct ShelfBorderShape: InsettableShape {
+    let notchWidth: CGFloat?
+    private var insetAmount: CGFloat = 0
+
+    init(notchWidth: CGFloat?, insetAmount: CGFloat = 0) {
+        self.notchWidth = notchWidth
+        self.insetAmount = insetAmount
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let insetRect = rect.insetBy(dx: insetAmount, dy: insetAmount)
+
+        guard let notchWidth else {
+            return RoundedRectangle(
+                cornerRadius: max(0, ShelfMetrics.cornerRadius - insetAmount),
+                style: .continuous
+            )
+            .path(in: insetRect)
+        }
+
+        return Path(
+            ShelfNotchSilhouettePath.make(
+                in: insetRect,
+                notchWidth: max(0, notchWidth - insetAmount * 2),
+                cornerRadius: max(0, ShelfMetrics.cornerRadius - insetAmount),
+                topEdgeAtMinY: true
+            )
+        )
+    }
+
+    func inset(by amount: CGFloat) -> ShelfBorderShape {
+        ShelfBorderShape(
+            notchWidth: notchWidth,
+            insetAmount: insetAmount + amount
+        )
     }
 }
 
