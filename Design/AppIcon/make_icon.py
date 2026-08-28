@@ -2,8 +2,8 @@
 """Shelfer app icon: the shelf panel itself, with a cursor setting a file down.
 
 Abstracted to four shapes — the panel, its grab handle, one file, one pointer.
-Colours are taken from the running app: the panel's deep teal and the pale
-mint of its label pill.
+Colours are taken from the running app: the pale mint of its label pill,
+on a deep marine blue ground.
 """
 
 import io
@@ -70,14 +70,14 @@ class Art:
         self.small = small
         if small:
             self.handle = None
-            self.doc = dict(x=340, y=306, w=330, h=420, r=30, cut=110)
+            self.doc = dict(x=324, y=288, w=330, h=420, r=30, cut=110)
             self.doc_rot = -10
-            self.ptr = dict(x=302, y=320, k=1.54, stroke=10)
+            self.ptr = dict(x=592, y=540, k=1.54, stroke=10)
         else:
             self.handle = dict(x=437, y=188, w=150, h=20, rx=10)
-            self.doc = dict(x=352, y=318, w=306, h=390, r=26, cut=96)
+            self.doc = dict(x=336, y=300, w=306, h=390, r=26, cut=96)
             self.doc_rot = -10
-            self.ptr = dict(x=316, y=330, k=1.38, stroke=8)
+            self.ptr = dict(x=598, y=548, k=1.38, stroke=8)
 
     @property
     def doc_pivot(self):
@@ -123,17 +123,17 @@ def render(markup):
 
 # ---------------------------------------------------------------- palette
 
-PANEL_DEEP = "#16302B"
+PANEL_DEEP = "#12274C"
 
 DEFS = """
 <linearGradient id="panel" x1="0.15" y1="0" x2="0.85" y2="1">
-  <stop offset="0"    stop-color="#4E7A6C"/>
-  <stop offset="0.48" stop-color="#2E524A"/>
-  <stop offset="1"    stop-color="#16302B"/>
+  <stop offset="0"    stop-color="#4E86B8"/>
+  <stop offset="0.48" stop-color="#27538A"/>
+  <stop offset="1"    stop-color="#10264D"/>
 </linearGradient>
 <radialGradient id="glow" cx="0.5" cy="0.14" r="0.74">
-  <stop offset="0" stop-color="#B8E5D2" stop-opacity="0.20"/>
-  <stop offset="1" stop-color="#B8E5D2" stop-opacity="0"/>
+  <stop offset="0" stop-color="#BCD9F2" stop-opacity="0.20"/>
+  <stop offset="1" stop-color="#BCD9F2" stop-opacity="0"/>
 </radialGradient>
 <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
   <stop offset="0"    stop-color="#FFFFFF" stop-opacity="0.34"/>
@@ -165,10 +165,10 @@ def build(small=False):
             f'<rect x="{h["x"]}" y="{h["y"]}" width="{h["w"]}" height="{h["h"]}" '
             f'rx="{h["rx"]}" ry="{h["rx"]}" fill="#FFFFFF" fill-opacity="0.34"/>'))
 
-    doc_shadow = render(svg(art.doc_silhouette("#06201B")))
+    doc_shadow = render(svg(art.doc_silhouette("#04142E")))
     doc = render(svg(art.doc_group("url(#page)", "#8FB6A6"), DEFS))
 
-    ptr_shadow = render(svg(art.pointer("#06201B", "#06201B")))
+    ptr_shadow = render(svg(art.pointer("#04142E", "#04142E")))
     pointer = render(svg(art.pointer("#FFFFFF", PANEL_DEEP)))
 
     rim = render(svg(
