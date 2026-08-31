@@ -216,7 +216,7 @@ final class FinderSyncOnboardingController {
 private struct FinderSyncOnboardingView: View {
     @ObservedObject var model: FinderSyncOnboardingModel
     let dismiss: () -> Void
-    @State private var previewedFeature: ShelferTutorialFeature? = .shake
+    @State private var selectedFeature: ShelferTutorialFeature = .shake
 
     var body: some View {
         VStack(spacing: 0) {
@@ -244,9 +244,6 @@ private struct FinderSyncOnboardingView: View {
         .padding(.top, 30)
         .padding(.bottom, 28)
         .frame(width: 760, height: 520)
-        .onChange(of: model.page) { _, _ in
-            previewedFeature = model.page == .basics ? .shake : nil
-        }
     }
 
     private var basicsPage: some View {
@@ -264,6 +261,7 @@ private struct FinderSyncOnboardingView: View {
                     }
                 }
                 .frame(width: 364)
+                .animation(.easeInOut(duration: 0.24), value: selectedFeature)
 
                 tutorialPreview
                     .frame(maxWidth: .infinity)
@@ -410,53 +408,54 @@ private struct FinderSyncOnboardingView: View {
     }
 
     private func tutorialRow(_ feature: ShelferTutorialFeature) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: feature.icon)
-                .font(.system(size: 17, weight: .medium))
-                .foregroundStyle(.blue)
-                .frame(width: 34, height: 34)
-                .background(.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+        let isSelected = selectedFeature == feature
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(feature.title)
-                    .font(.system(size: 13, weight: .semibold))
-
-                Text(feature.description)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+        return Button {
+            withAnimation(.easeInOut(duration: 0.24)) {
+                selectedFeature = feature
             }
+        } label: {
+            HStack(alignment: isSelected ? .top : .center, spacing: 14) {
+                Image(systemName: feature.icon)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(.blue)
+                    .frame(width: 34, height: 34)
+                    .background(.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 9))
+                    .padding(.top, isSelected ? 1 : 0)
 
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 52)
-        .background(
-            previewedFeature == feature
-                ? Color.blue.opacity(0.14)
-                : Color.primary.opacity(0.045),
-            in: RoundedRectangle(cornerRadius: 13)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 13)
-                .stroke(
-                    previewedFeature == feature
-                        ? Color.blue.opacity(0.36)
-                        : Color.clear,
-                    lineWidth: 1
-                )
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 13))
-        .onHover { isHovering in
-            withAnimation(.easeOut(duration: 0.18)) {
-                if isHovering {
-                    previewedFeature = feature
-                } else if previewedFeature == feature {
-                    previewedFeature = .shake
+                VStack(alignment: .leading, spacing: isSelected ? 6 : 2) {
+                    Text(feature.title)
+                        .font(.system(size: 13, weight: .semibold))
+
+                    Text(feature.description)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(isSelected ? nil : 1)
+                        .fixedSize(horizontal: false, vertical: isSelected)
+                        .lineSpacing(2)
                 }
+
+                Spacer(minLength: 0)
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, isSelected ? 11 : 7)
+            .frame(minHeight: isSelected ? 76 : 48, alignment: .topLeading)
+            .background(
+                isSelected
+                    ? Color.blue.opacity(0.14)
+                    : Color.primary.opacity(0.045),
+                in: RoundedRectangle(cornerRadius: 13)
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 13))
         }
-        .accessibilityHint("Hover to preview this feature")
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .accessibilityIdentifier("tutorial.feature.\(feature.rawValue)")
+        .accessibilityLabel(feature.title)
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityHint(
+            "Select to show the full description and play this feature preview"
+        )
     }
 
     private var tutorialPreview: some View {
@@ -464,51 +463,40 @@ private struct FinderSyncOnboardingView: View {
             RoundedRectangle(cornerRadius: 15)
                 .fill(Color.black.opacity(0.84))
 
-            if let previewedFeature {
-                TutorialPreviewPlayer(resourceName: previewedFeature.videoResource)
-                    .id(previewedFeature)
-                    .clipShape(RoundedRectangle(cornerRadius: 15))
-                    .transition(.opacity)
-                    .accessibilityLabel("\(previewedFeature.title) preview")
-
-                LinearGradient(
-                    colors: [.clear, .black.opacity(0.62)],
-                    startPoint: .center,
-                    endPoint: .bottom
-                )
+            TutorialPreviewPlayer(resourceName: selectedFeature.videoResource)
+                .id(selectedFeature)
                 .clipShape(RoundedRectangle(cornerRadius: 15))
-                .allowsHitTesting(false)
-
-                VStack {
-                    Spacer()
-                    HStack(spacing: 6) {
-                        Image(systemName: "play.fill")
-                            .font(.system(size: 9, weight: .bold))
-                        Text(previewedFeature.title)
-                            .font(.system(size: 11, weight: .semibold))
-                        Spacer()
-                    }
-                    .foregroundStyle(.white.opacity(0.92))
-                    .padding(12)
-                }
-                .allowsHitTesting(false)
-            } else {
-                VStack(spacing: 10) {
-                    Image(systemName: "play.rectangle.on.rectangle")
-                        .font(.system(size: 28, weight: .light))
-                    Text("Hover a feature to preview")
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .foregroundStyle(.white.opacity(0.52))
                 .transition(.opacity)
+                .accessibilityLabel("\(selectedFeature.title) preview")
+
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.62)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 15))
+            .allowsHitTesting(false)
+
+            VStack {
+                Spacer()
+                HStack(spacing: 6) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 9, weight: .bold))
+                    Text(selectedFeature.title)
+                        .font(.system(size: 11, weight: .semibold))
+                    Spacer()
+                }
+                .foregroundStyle(.white.opacity(0.92))
+                .padding(12)
             }
+            .allowsHitTesting(false)
         }
         .frame(height: 232)
         .overlay {
             RoundedRectangle(cornerRadius: 15)
                 .stroke(.white.opacity(0.12), lineWidth: 1)
         }
-        .animation(.easeOut(duration: 0.18), value: previewedFeature)
+        .animation(.easeOut(duration: 0.18), value: selectedFeature)
     }
 
     private var statusView: some View {

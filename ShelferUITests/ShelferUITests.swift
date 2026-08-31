@@ -40,20 +40,25 @@ final class ShelferUITests: XCTestCase {
         app.launch()
 
         XCTAssertTrue(app.staticTexts["Meet Shelfer"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Pick up and shake"].exists)
-        XCTAssertTrue(app.staticTexts["Keep paths for the CLI"].exists)
+        let shakeCell = app.buttons["tutorial.feature.shake"]
+        let pathCell = app.buttons["tutorial.feature.paths"]
+        XCTAssertTrue(shakeCell.exists)
+        XCTAssertTrue(pathCell.exists)
+        XCTAssertEqual(shakeCell.value as? String, "Selected")
+        XCTAssertGreaterThan(shakeCell.frame.height, pathCell.frame.height)
 
-        app.staticTexts["Meet Shelfer"].hover()
-        XCTAssertEqual(app.staticTexts.matching(identifier: "Pick up and shake").count, 2)
-
-        app.staticTexts["Keep paths for the CLI"].firstMatch.hover()
-        let pathPreviewLabel = app.staticTexts.matching(identifier: "Keep paths for the CLI")
-        let previewAppeared = NSPredicate { _, _ in
-            pathPreviewLabel.count == 2
-                && app.staticTexts.matching(identifier: "Pick up and shake").count == 1
+        pathCell.click()
+        let pathSelectionPersisted = NSPredicate { _, _ in
+            pathCell.value as? String == "Selected"
+                && shakeCell.value as? String == "Not selected"
+                && pathCell.frame.height > shakeCell.frame.height
         }
-        expectation(for: previewAppeared, evaluatedWith: nil)
+        expectation(for: pathSelectionPersisted, evaluatedWith: nil)
         waitForExpectations(timeout: 2)
+
+        // Moving the pointer away must not reset a click-based selection.
+        app.staticTexts["Meet Shelfer"].hover()
+        XCTAssertEqual(pathCell.value as? String, "Selected")
 
         app.buttons["Continue"].click()
 
