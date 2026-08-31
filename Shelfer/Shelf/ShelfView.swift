@@ -13,6 +13,8 @@ struct ShelfView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var isHoveringShelf = false
     @State private var isTargeted = false
+    @State private var areFilesTargeted = false
+    @State private var isPathOnlyTargeted = false
 
     var body: some View {
         ZStack {
@@ -24,9 +26,19 @@ struct ShelfView: View {
                 }
             } else {
                 ShelfSurface(
+                    prefersPathOnlyDrop: store.prefersPathOnlyDrop,
+                    protectsTopLeftControl: !store.isEmpty
+                        || store.showsEmptyCloseButton,
+                    protectsTopRightControl: !store.isEmpty,
+                    topControlOuterInset: store.isExpanded
+                        ? ShelfDetailMetrics.inset
+                        : ShelfMetrics.buttonOuterInset,
                     onTargetedChange: { isTargeted = $0 },
+                    onFilesTargetedChange: { areFilesTargeted = $0 },
+                    onPathOnlyChange: { isPathOnlyTargeted = $0 },
                     onDrop: { store.send(.itemsDropped($0)) }
                 )
+                .zIndex(0)
 
                 Group {
                     if store.isExpanded {
@@ -43,16 +55,21 @@ struct ShelfView: View {
                 // Keep SwiftUI's animation transaction on the controls only. The
                 // panel owns all geometry changes.
                 .animation(expansionAnimation, value: store.isExpanded)
+                .zIndex(10)
 
                 dockCornerTargets
+                    .zIndex(20)
+
+                if isTargeted && areFilesTargeted {
+                    pathOnlyDropHint
+                        .offset(y: 34)
+                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .onHover { isHoveringShelf = $0 }
-        .overlay(alignment: .center) {
-            if store.didCopy { CopiedBadge() }
-        }
-        .animation(.easeOut(duration: 0.15), value: store.didCopy)
+        .animation(.easeOut(duration: 0.14), value: isPathOnlyTargeted)
     }
 
     private var expansionAnimation: Animation? {
@@ -74,16 +91,38 @@ struct ShelfView: View {
     private var border: some View {
         ShelfBorderShape(notchWidth: mergingNotchWidth)
             .strokeBorder(
-                isTargeted ? Color.accentColor : Color.white.opacity(0.14),
+                isTargeted
+                    ? (isPathOnlyTargeted ? Color.cyan : Color.accentColor)
+                    : Color.white.opacity(0.14),
                 lineWidth: isTargeted ? 3 : 1
             )
             .allowsHitTesting(false)
     }
 
+    private var pathOnlyDropHint: some View {
+        Label(
+            isPathOnlyTargeted ? "Drop paths only" : "Hold ⌥ for path only",
+            systemImage: isPathOnlyTargeted ? "terminal" : "option"
+        )
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(.white.opacity(isPathOnlyTargeted ? 0.95 : 0.68))
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(
+                    isPathOnlyTargeted ? Color.cyan.opacity(0.8) : Color.white.opacity(0.12),
+                    lineWidth: 1
+                )
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
     private var mergingNotchWidth: CGFloat? {
         guard let notchDock = store.notchDock,
-              notchDock.presentation == .attached
-                  || notchDock.presentation == .retracting else { return nil }
+              notchDock.presentation == .retracting else { return nil }
         return ShelfNotchMetrics.mergeNeckWidth(
             for: notchDock.target.notchFrame.width
         )
@@ -134,7 +173,7 @@ struct ShelfView: View {
                         closeButton
                         Spacer()
                     }
-                    .padding(ShelfMetrics.outerInset)
+                    .padding(ShelfMetrics.buttonOuterInset)
 
                     Spacer(minLength: 0)
                 }
@@ -173,8 +212,8 @@ struct ShelfView: View {
             topButtons
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, ShelfMetrics.outerInset)
-        .padding(.top, ShelfMetrics.outerInset)
+        .padding(.horizontal, ShelfMetrics.buttonOuterInset)
+        .padding(.top, ShelfMetrics.buttonOuterInset)
     }
 
     private var handle: some View {
@@ -189,13 +228,15 @@ struct ShelfView: View {
     }
 
     private var topButtons: some View {
-        HStack {
-            closeButton
-            Spacer()
-            circleButton(systemImage: "trash", label: "Clear shelf") {
-                store.send(.clearButtonTapped)
+        GlassEffectContainer(spacing: 8) {
+            HStack {
+                closeButton
+                Spacer()
+                circleButton(systemImage: "trash", label: "Clear shelf") {
+                    store.send(.clearButtonTapped)
+                }
+                .disabled(store.isClearing)
             }
-            .disabled(store.isClearing)
         }
     }
 
@@ -210,17 +251,12 @@ struct ShelfView: View {
         label: String,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(width: ShelfMetrics.buttonDiameter, height: ShelfMetrics.buttonDiameter)
-                .background(Circle().fill(.white.opacity(0.16)))
-        }
-        .buttonStyle(.plain)
-        .shelfHoverHighlight()
-        .focusEffectDisabled()
-        .accessibilityLabel(label)
+        ShelfCircularButton(
+            systemImage: systemImage,
+            label: label,
+            diameter: ShelfMetrics.buttonDiameter,
+            action: action
+        )
     }
 
     @ViewBuilder
@@ -250,9 +286,27 @@ struct ShelfView: View {
                     contents: store.items.map(\.content),
                     onCompleted: { store.send(.itemsDraggedOut($0)) },
                     onDragActiveChange: { store.send(.shelfDragActivityChanged($0)) },
-                    onDoubleClick: { store.send(.stackDoubleClicked) }
+                    onDoubleClick: { store.send(.stackDoubleClicked) },
+                    onCopy: { store.send(.itemsCopyRequested($0, .stack)) },
+                    onShare: {
+                        store.send(.shareItemsRequested($0, store.items.map(\.content)))
+                    },
+                    onShowInFinder: { store.send(.revealItemsInFinderRequested($0)) },
+                    onKeepPathsOnly: {
+                        store.send(.itemsConvertToPathsRequested(Set(store.items.ids)))
+                    },
+                    onClear: { store.send(.clearButtonTapped) }
                 )
             }
+            .overlay {
+                if store.copyFeedbackTarget == .stack {
+                    CopiedBadge()
+                }
+            }
+            .animation(
+                .easeOut(duration: 0.15),
+                value: store.copyFeedbackTarget == .stack
+            )
         }
     }
 
@@ -267,12 +321,21 @@ struct ShelfView: View {
             store.send(.expandButtonTapped)
         } label: {
             HStack(spacing: 4) {
-                MarqueeText(
-                    text: labelText,
-                    font: .system(size: 11, weight: .regular),
-                    maxWidth: ShelfMetrics.labelTextMaxWidth,
-                    pointsPerSecond: ShelfMetrics.labelMarqueePointsPerSecond
-                )
+                if store.items.count == 1 {
+                    MarqueeText(
+                        text: labelText,
+                        font: .system(size: 11, weight: .regular),
+                        maxWidth: ShelfMetrics.labelTextMaxWidth,
+                        pointsPerSecond: ShelfMetrics.labelMarqueePointsPerSecond
+                    )
+                } else {
+                    // A count represents the whole stack and is always short
+                    // enough to read at a glance, so it should never marquee.
+                    Text(labelText)
+                        .font(.system(size: 11, weight: .regular))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
                 Image(systemName: "chevron.right")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.7))
@@ -280,10 +343,10 @@ struct ShelfView: View {
             .foregroundStyle(.white)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(Capsule().fill(.white.opacity(0.16)))
+            .glassEffect(.regular.interactive(), in: .capsule)
+            .contentShape(.interaction, Capsule())
         }
         .buttonStyle(.plain)
-        .shelfHoverHighlight()
         .focusEffectDisabled()
         .accessibilityLabel("Show shelf contents")
         .help(labelHelpText)
@@ -299,6 +362,116 @@ struct ShelfView: View {
 
     private var labelHelpText: String {
         store.items.map(\.displayName).joined(separator: "\n")
+    }
+}
+
+/// A circular glass control with a concrete interaction surface. The glass is
+/// a visual effect and an SF Symbol only contributes its opaque glyph to hit
+/// testing in some SwiftUI container/transition combinations. The nearly
+/// transparent disc gives every shelf state the same full-size button target.
+struct ShelfCircularButton: View {
+    let systemImage: String
+    let label: String
+    let diameter: CGFloat
+    var isSelected = false
+    let action: () -> Void
+
+    private var hitDiameter: CGFloat {
+        max(diameter, ShelfMetrics.buttonHitDiameter)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(0.001))
+
+                Image(systemName: systemImage)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: diameter, height: diameter)
+                    .glassEffect(
+                        isSelected
+                            ? .regular.tint(.white.opacity(0.2)).interactive()
+                            : .regular.interactive(),
+                        in: .circle
+                    )
+            }
+            .frame(width: hitDiameter, height: hitDiameter)
+            .contentShape(.interaction, Circle())
+        }
+        .frame(width: hitDiameter, height: hitDiameter)
+        .contentShape(.interaction, Circle())
+        .buttonStyle(.plain)
+        .focusEffectDisabled()
+        .accessibilityLabel(label)
+        .overlay {
+            ShelfCircularButtonHitTarget(action: action)
+                .frame(width: hitDiameter, height: hitDiameter)
+                .accessibilityHidden(true)
+                .zIndex(1)
+        }
+    }
+}
+
+/// SwiftUI continues to draw and expose the Liquid Glass button to
+/// accessibility, while this borderless AppKit button owns pointer delivery.
+/// Its hit test is a real 44pt circle and accepts the first click even while
+/// Finder remains active, so view transitions cannot collapse it to the glyph.
+private struct ShelfCircularButtonHitTarget: NSViewRepresentable {
+    @Environment(\.isEnabled) private var isEnabled
+
+    let action: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(action: action)
+    }
+
+    func makeNSView(context: Context) -> ShelfCircularHitButton {
+        let button = ShelfCircularHitButton(frame: .zero)
+        button.title = ""
+        button.setButtonType(.momentaryPushIn)
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.performAction)
+        button.isBordered = false
+        button.focusRingType = .none
+        button.setAccessibilityElement(false)
+        return button
+    }
+
+    func updateNSView(_ nsView: ShelfCircularHitButton, context: Context) {
+        context.coordinator.action = action
+        nsView.isEnabled = isEnabled
+    }
+
+    final class Coordinator: NSObject {
+        var action: () -> Void
+
+        init(action: @escaping () -> Void) {
+            self.action = action
+        }
+
+        @objc func performAction() {
+            action()
+        }
+    }
+}
+
+final class ShelfCircularHitButton: NSButton {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard !isHidden, alphaValue > 0 else { return nil }
+
+        let radius = min(bounds.width, bounds.height) / 2
+        let distance = hypot(point.x - bounds.midX, point.y - bounds.midY)
+        return distance <= radius ? self : nil
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        // Liquid Glass is rendered by the SwiftUI button directly underneath.
     }
 }
 

@@ -5,17 +5,85 @@
 
 import AppKit
 
+/// One synchronous source of truth for the modifier intent of the active
+/// cross-application drag. Destination windows can appear before TCA finishes
+/// propagating the corresponding activity event, so they must not depend only
+/// on reducer state to recover the Option key.
+@MainActor
+enum ShelfActiveDragIntent {
+    private(set) static var prefersPathOnlyDrop = false
+
+    static func begin(
+        eventFlags: NSEvent.ModifierFlags,
+        eventCGFlags: CGEventFlags?
+    ) {
+        prefersPathOnlyDrop = ShelfModifierState.optionIsPressed(
+            eventFlags: eventFlags,
+            eventCGFlags: eventCGFlags
+        )
+    }
+
+    static func observe(
+        eventFlags: NSEvent.ModifierFlags,
+        eventCGFlags: CGEventFlags?
+    ) {
+        prefersPathOnlyDrop = prefersPathOnlyDrop
+            || ShelfModifierState.optionIsPressed(
+                eventFlags: eventFlags,
+                eventCGFlags: eventCGFlags
+            )
+    }
+
+    /// Mouse-up can be observed before an AppKit drag destination receives
+    /// `performDragOperation`. Retain the intent until the destination consumes
+    /// it or the next mouse-down starts a new drag.
+    static func end() {
+        // Deliberately retained through AppKit's trailing drop callbacks.
+    }
+
+    static func consume() {
+        prefersPathOnlyDrop = false
+    }
+
+    static func reset() {
+        prefersPathOnlyDrop = false
+    }
+}
+
+enum ShelfModifierState {
+    static func optionIsPressed(
+        eventFlags: NSEvent.ModifierFlags,
+        eventCGFlags: CGEventFlags? = nil,
+        sessionFlags: CGEventFlags? = nil,
+        physicalOptionPressed: Bool? = nil
+    ) -> Bool {
+        if eventFlags.contains(.option) { return true }
+        if eventCGFlags?.contains(.maskAlternate) == true { return true }
+
+        let physicalOptionPressed = physicalOptionPressed
+            ?? (
+                CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(58))
+                    || CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(61))
+            )
+        if physicalOptionPressed { return true }
+
+        let sessionFlags = sessionFlags
+            ?? CGEventSource.flagsState(.combinedSessionState)
+        return sessionFlags.contains(.maskAlternate)
+    }
+}
+
 /// Watches system-wide mouse events for a shake (or Shift-hold) performed while a
 /// drag is in flight, and reports where to summon a shelf.
 @MainActor
 final class DragMonitor {
     /// Reports whether the pointer is currently carrying pasteboard content.
     /// This drives drag-only affordances such as the sharing dock.
-    var onDragActivityChanged: ((Bool) -> Void)?
+    var onDragActivityChanged: ((Bool, Bool) -> Void)?
 
     /// Called with the cursor location when the user asks for a shelf mid-drag.
     /// The shelf opens empty — items land only when the user actually drops them in.
-    var onShelfRequested: ((CGPoint) -> Void)?
+    var onShelfRequested: ((CGPoint, Bool) -> Void)?
 
     /// Called once the drag that summoned a shelf has finished and any drop has
     /// had time to land, so an unused shelf can be dismissed.
@@ -29,6 +97,7 @@ final class DragMonitor {
     private var lastChangeCountCheck: TimeInterval = 0
     private var isDragActive = false
     private var hasTriggeredForCurrentDrag = false
+    private var prefersPathOnlyDrop = false
 
     /// Bumped every time a shelf is summoned, so work scheduled for an earlier
     /// shelf can't act on a newer one.
@@ -75,6 +144,7 @@ final class DragMonitor {
         dragActivityEndTask?.cancel()
         dragActivityEndTask = nil
         endDrag()
+        ShelfActiveDragIntent.reset()
     }
 
     private func handle(_ event: NSEvent) {
@@ -105,9 +175,23 @@ final class DragMonitor {
         lastChangeCountCheck = event.timestamp
         isDragActive = false
         hasTriggeredForCurrentDrag = false
+        ShelfActiveDragIntent.begin(
+            eventFlags: event.modifierFlags,
+            eventCGFlags: event.cgEvent?.flags
+        )
+        prefersPathOnlyDrop = ShelfActiveDragIntent.prefersPathOnlyDrop
     }
 
     private func handleDrag(_ event: NSEvent) {
+        // Preserve Option as an intent of the drag that began in another app.
+        // By the time the newly-created shelf receives draggingEntered, the
+        // current global modifier flags are not guaranteed to retain it.
+        ShelfActiveDragIntent.observe(
+            eventFlags: event.modifierFlags,
+            eventCGFlags: event.cgEvent?.flags
+        )
+        prefersPathOnlyDrop = ShelfActiveDragIntent.prefersPathOnlyDrop
+
         if !isDragActive {
             detectDragStart(event)
             guard isDragActive else { return }
@@ -129,7 +213,7 @@ final class DragMonitor {
 
         guard DragSession.changeCount > pasteboardCountAtMouseDown else { return }
         isDragActive = true
-        onDragActivityChanged?(true)
+        onDragActivityChanged?(true, prefersPathOnlyDrop)
         waitForDragActivityToFinish()
         startShiftHoldWatch()
     }
@@ -145,6 +229,7 @@ final class DragMonitor {
 
             while NSEvent.pressedMouseButtons & Self.leftButtonMask != 0 {
                 if Task.isCancelled { return }
+                captureCurrentOptionIntent()
                 try? await Task.sleep(for: pollInterval)
             }
 
@@ -168,6 +253,8 @@ final class DragMonitor {
                       isDragActive,
                       !hasTriggeredForCurrentDrag else { return }
 
+                captureCurrentOptionIntent()
+
                 if NSEvent.modifierFlags.contains(.shift) {
                     held += pollInterval
                     if held >= shiftHoldDuration {
@@ -185,12 +272,25 @@ final class DragMonitor {
 
     private func trigger(at location: CGPoint) {
         guard !hasTriggeredForCurrentDrag else { return }
+        captureCurrentOptionIntent()
         hasTriggeredForCurrentDrag = true
         shelfGeneration &+= 1
         shiftHoldTask?.cancel()
 
-        onShelfRequested?(location)
+        onShelfRequested?(location, prefersPathOnlyDrop)
         waitForDragToFinish()
+    }
+
+    /// Finder can establish the selection first and receive Option as a
+    /// separate keyboard transition before the drag starts moving. Global
+    /// mouse monitors do not receive that flags-changed event without an
+    /// Accessibility grant, so sample the physical modifier state directly.
+    private func captureCurrentOptionIntent() {
+        ShelfActiveDragIntent.observe(
+            eventFlags: NSEvent.modifierFlags,
+            eventCGFlags: nil
+        )
+        prefersPathOnlyDrop = ShelfActiveDragIntent.prefersPathOnlyDrop
     }
 
     /// A drag session can swallow the `.leftMouseUp` event, so the button state is
@@ -222,9 +322,11 @@ final class DragMonitor {
         shiftHoldTask = nil
         isDragActive = false
         hasTriggeredForCurrentDrag = false
+        prefersPathOnlyDrop = false
+        ShelfActiveDragIntent.end()
         shakeDetector.reset()
         if wasActive {
-            onDragActivityChanged?(false)
+            onDragActivityChanged?(false, false)
         }
     }
 }

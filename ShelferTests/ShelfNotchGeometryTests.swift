@@ -56,6 +56,110 @@ struct ShelfNotchGeometryTests {
         #expect(drop.maxY == target.screenFrame.maxY)
         #expect(ambient.midX == target.notchFrame.midX + ShelfNotchMetrics.viewHorizontalOffset)
         #expect(ambient.maxY == target.screenFrame.maxY + ShelfNotchMetrics.viewVerticalOffset)
+        #expect(
+            ambient.minY
+                == target.notchFrame.minY
+                    - ShelfNotchMetrics.idleHintDepth
+                    - ShelfNotchMetrics.ambientBottomRenderOverflow
+                    + ShelfNotchMetrics.viewVerticalOffset
+        )
+    }
+
+    @Test func expandedShelfCanBeCapturedFromEitherSide() {
+        let target = ShelfNotchTarget(
+            displayID: 7,
+            screenFrame: screenFrame,
+            notchFrame: CGRect(x: 676, y: 950, width: 160, height: 32)
+        )
+        let capture = ShelfNotchGeometry.captureFrame(for: target)
+        let expandedSize = ShelfDetailMetrics.size
+        let leftSideContact = CGRect(
+            x: capture.minX - expandedSize.width + 4,
+            y: capture.minY + 4,
+            width: expandedSize.width,
+            height: expandedSize.height
+        )
+        let rightSideContact = CGRect(
+            x: capture.maxX - 4,
+            y: capture.minY + 4,
+            width: expandedSize.width,
+            height: expandedSize.height
+        )
+
+        #expect(
+            ShelfNotchGeometry.accepts(
+                leftSideContact,
+                for: target,
+                allowsSideContact: true
+            )
+        )
+        #expect(
+            ShelfNotchGeometry.accepts(
+                rightSideContact,
+                for: target,
+                allowsSideContact: true
+            )
+        )
+    }
+
+    @Test func sideCaptureOnlyAppliesToTheExpandedShelf() {
+        let target = ShelfNotchTarget(
+            displayID: 7,
+            screenFrame: screenFrame,
+            notchFrame: CGRect(x: 676, y: 950, width: 160, height: 32)
+        )
+        let capture = ShelfNotchGeometry.captureFrame(for: target)
+        let sideContact = CGRect(
+            x: capture.minX - ShelfDetailMetrics.size.width + 4,
+            y: capture.minY + 4,
+            width: ShelfDetailMetrics.size.width,
+            height: ShelfDetailMetrics.size.height
+        )
+
+        #expect(
+            !ShelfNotchGeometry.accepts(
+                sideContact,
+                for: target,
+                allowsSideContact: false
+            )
+        )
+    }
+
+    @Test func expandedShelfStillRequiresVerticalNotchContact() {
+        let target = ShelfNotchTarget(
+            displayID: 7,
+            screenFrame: screenFrame,
+            notchFrame: CGRect(x: 676, y: 950, width: 160, height: 32)
+        )
+        let capture = ShelfNotchGeometry.captureFrame(for: target)
+        let belowCaptureArea = CGRect(
+            x: capture.minX - ShelfDetailMetrics.size.width / 2,
+            y: capture.minY - ShelfDetailMetrics.size.height - 1,
+            width: ShelfDetailMetrics.size.width,
+            height: ShelfDetailMetrics.size.height
+        )
+
+        #expect(
+            !ShelfNotchGeometry.accepts(
+                belowCaptureArea,
+                for: target,
+                allowsSideContact: true
+            )
+        )
+    }
+
+    @Test func temporaryDropHighlightHasAStraightTopAndRoundedBottom() {
+        let rect = CGRect(x: 24, y: 0, width: 160, height: 50)
+        let path = ShelfNotchDropHighlightPath.make(
+            in: rect,
+            bottomCornerRadius: ShelfNotchMetrics.dropHighlightBottomCornerRadius
+        )
+
+        #expect(path.boundingBox == rect)
+        #expect(path.contains(CGPoint(x: rect.minX + 1, y: rect.maxY - 1)))
+        #expect(path.contains(CGPoint(x: rect.maxX - 1, y: rect.maxY - 1)))
+        #expect(!path.contains(CGPoint(x: rect.minX + 1, y: rect.minY + 1)))
+        #expect(!path.contains(CGPoint(x: rect.maxX - 1, y: rect.minY + 1)))
     }
 
     @Test func mergedShelfNarrowsToTheNotchOnlyAtItsTop() {
@@ -78,6 +182,81 @@ struct ShelfNotchGeometryTests {
                 )
             )
         )
+    }
+
+    @Test func suctionTwistsAndCompressesTheShelfTowardTheNotch() {
+        let rect = CGRect(origin: .zero, size: ShelfMetrics.size)
+        let notchWidth: CGFloat = 160
+        let restingPath = ShelfNotchSilhouettePath.make(
+            in: rect,
+            notchWidth: notchWidth,
+            cornerRadius: ShelfMetrics.cornerRadius,
+            topEdgeAtMinY: true
+        )
+        let twistingPath = ShelfNotchSilhouettePath.make(
+            in: rect,
+            notchWidth: notchWidth,
+            cornerRadius: ShelfMetrics.cornerRadius,
+            topEdgeAtMinY: true,
+            suctionProgress: 0.6
+        )
+        let absorbedPath = ShelfNotchSilhouettePath.make(
+            in: rect,
+            notchWidth: notchWidth,
+            cornerRadius: ShelfMetrics.cornerRadius,
+            topEdgeAtMinY: true,
+            suctionProgress: 1
+        )
+
+        #expect(restingPath.boundingBox == rect)
+        #expect(absorbedPath.boundingBox.height < rect.height * 0.4)
+        #expect(absorbedPath.contains(CGPoint(x: rect.midX, y: rect.minY + 1)))
+        #expect(!absorbedPath.contains(CGPoint(x: rect.midX, y: rect.maxY - 1)))
+
+        let trailingY = twistingPath.boundingBox.maxY - 3
+        #expect(twistingPath.contains(CGPoint(x: rect.midX + 35, y: trailingY)))
+        #expect(!twistingPath.contains(CGPoint(x: rect.midX - 50, y: trailingY)))
+        #expect(
+            ShelfNotchMetrics.suctionRetractionTravelDistance
+                < ShelfShareMetrics.panelSize(for: rect.size).height / 2
+        )
+    }
+
+    @Test func genieSurfaceCurlsUpperStripsBeforeLowerStrips() {
+        let size = ShelfShareMetrics.panelSize(for: ShelfMetrics.size)
+        let resting = ShelfGenieGeometry.state(
+            progress: 0,
+            top: 0.4,
+            bottom: 0.45,
+            size: size
+        )
+        let upper = ShelfGenieGeometry.state(
+            progress: 0.5,
+            top: 0,
+            bottom: 0.05,
+            size: size
+        )
+        let lower = ShelfGenieGeometry.state(
+            progress: 0.5,
+            top: 0.9,
+            bottom: 0.95,
+            size: size
+        )
+        let absorbed = ShelfGenieGeometry.state(
+            progress: 1,
+            top: 0.9,
+            bottom: 0.95,
+            size: size
+        )
+
+        #expect(resting.scaleX == 1)
+        #expect(abs(resting.scaleY - 1) < 0.0001)
+        #expect(upper.scaleX < lower.scaleX)
+        #expect(upper.center.x != lower.center.x)
+        #expect(abs(upper.rotationX) > abs(lower.rotationX))
+        #expect(abs(absorbed.scaleX - 0.16) < 0.0001)
+        #expect(absorbed.center.y < size.height * 0.1)
+        #expect(absorbed.opacity < 0.0001)
     }
 
     @Test func neckCoversTheNotchsRoundedLowerCorners() {
@@ -141,6 +320,7 @@ struct ShelfNotchGeometryTests {
         ))
         #expect(root.shelfBackground.layer?.mask != nil)
         #expect(root.shelfBackground.layer?.mask?.bounds.size == ShelfMetrics.size)
+        #expect(root.shelfBackground.material == .menu)
     }
 
     @Test func directNotchShelfRestoresItsMaterialWhenPulledOut() async throws {
@@ -176,5 +356,6 @@ struct ShelfNotchGeometryTests {
         #expect(!root.shelfBackground.isHidden)
         #expect(root.shelfBackground.frame.size == ShelfMetrics.size)
         #expect(root.shelfBackground.notchMergeWidth == nil)
+        #expect(root.shelfBackground.material == .menu)
     }
 }

@@ -15,6 +15,7 @@ final class ShelfNotchDropController {
 
     private var panels: [UInt32: ShelfNotchDropPanel] = [:]
     private var isDragActive = false
+    private var prefersPathOnlyDrop = false
     private var panelRemovalTask: Task<Void, Never>?
     private var screenParametersObserver: NSObjectProtocol?
 
@@ -32,9 +33,12 @@ final class ShelfNotchDropController {
         }
     }
 
-    func setDragActive(_ isActive: Bool) {
-        guard isActive != isDragActive else { return }
+    func setDragActive(_ isActive: Bool, prefersPathOnlyDrop: Bool) {
+        guard isActive != isDragActive
+                || prefersPathOnlyDrop != self.prefersPathOnlyDrop
+        else { return }
         isDragActive = isActive
+        self.prefersPathOnlyDrop = isActive && prefersPathOnlyDrop
 
         if isActive {
             cancelPanelRemoval()
@@ -46,6 +50,7 @@ final class ShelfNotchDropController {
 
     func invalidate() {
         isDragActive = false
+        prefersPathOnlyDrop = false
         cancelPanelRemoval()
         removePanels()
         if let screenParametersObserver {
@@ -58,7 +63,10 @@ final class ShelfNotchDropController {
         removePanels()
 
         for target in ShelfNotchGeometry.targets() {
-            let panel = ShelfNotchDropPanel(target: target) { [weak self] target, contents in
+            let panel = ShelfNotchDropPanel(
+                target: target,
+                prefersPathOnlyDrop: prefersPathOnlyDrop
+            ) { [weak self] target, contents in
                 self?.onDrop(target, contents)
             }
             panels[target.displayID] = panel
@@ -97,11 +105,26 @@ final class ShelfNotchDropController {
         panelRemovalTask?.cancel()
         panelRemovalTask = nil
     }
+
+    static func fileDropMode(
+        modifierFlags: NSEvent.ModifierFlags,
+        pasteboard: NSPasteboard,
+        prefersPathOnlyDrop: Bool,
+        sessionModifierFlags: CGEventFlags? = nil
+    ) -> ShelfFileDropMode {
+        ShelfSurface.SurfaceView.fileDropMode(
+            modifierFlags: modifierFlags,
+            pasteboard: pasteboard,
+            prefersPathOnlyDrop: prefersPathOnlyDrop,
+            sessionModifierFlags: sessionModifierFlags
+        )
+    }
 }
 
 private final class ShelfNotchDropPanel: NSPanel {
     init(
         target: ShelfNotchTarget,
+        prefersPathOnlyDrop: Bool,
         onDrop: @escaping (ShelfNotchTarget, [ShelfItem.Content]) -> Void
     ) {
         let ambientFrame = ShelfNotchGeometry.ambientFrame(for: target)
@@ -136,7 +159,11 @@ private final class ShelfNotchDropPanel: NSPanel {
         ])
 
         let dropFrame = ShelfNotchGeometry.dropFrame(for: target)
-        let dropTarget = ShelfNotchDropTargetView(target: target, onDrop: onDrop)
+        let dropTarget = ShelfNotchDropTargetView(
+            target: target,
+            prefersPathOnlyDrop: prefersPathOnlyDrop,
+            onDrop: onDrop
+        )
         dropTarget.frame = CGRect(
             x: dropFrame.minX - ambientFrame.minX,
             y: dropFrame.minY - ambientFrame.minY,
@@ -153,6 +180,7 @@ private final class ShelfNotchDropPanel: NSPanel {
 
 private final class ShelfNotchDropTargetView: NSView {
     private let target: ShelfNotchTarget
+    private let prefersPathOnlyDrop: Bool
     private let onDrop: (ShelfNotchTarget, [ShelfItem.Content]) -> Void
     private var isTargeted = false {
         didSet {
@@ -163,9 +191,11 @@ private final class ShelfNotchDropTargetView: NSView {
 
     init(
         target: ShelfNotchTarget,
+        prefersPathOnlyDrop: Bool,
         onDrop: @escaping (ShelfNotchTarget, [ShelfItem.Content]) -> Void
     ) {
         self.target = target
+        self.prefersPathOnlyDrop = prefersPathOnlyDrop
         self.onDrop = onDrop
         super.init(frame: .zero)
         registerForDraggedTypes([.fileURL, .string])
@@ -185,21 +215,28 @@ private final class ShelfNotchDropTargetView: NSView {
 
     override func draggingExited(_ sender: NSDraggingInfo?) {
         isTargeted = false
+        fileDropMode = .files
+        preparedPayload = nil
     }
 
     override func draggingEnded(_ sender: NSDraggingInfo) {
         isTargeted = false
+        resetDragSession()
     }
 
     override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        !ShelfSurface.SurfaceView.contents(from: sender.draggingPasteboard).isEmpty
+        updateFileDropMode(for: sender)
+        return !contents(for: sender).isEmpty
     }
 
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        let contents = ShelfSurface.SurfaceView.contents(from: sender.draggingPasteboard)
+        updateFileDropMode(for: sender)
+        let contents = contents(for: sender)
         guard !contents.isEmpty else { return false }
 
         isTargeted = false
+        resetDragSession()
+        ShelfActiveDragIntent.consume()
         ShelfHaptics.confirmation()
         DispatchQueue.main.async { [target, onDrop] in
             onDrop(target, contents)
@@ -211,23 +248,40 @@ private final class ShelfNotchDropTargetView: NSView {
         super.draw(dirtyRect)
         guard isTargeted else { return }
 
-        let revealDepth = ShelfNotchMetrics.dropTargetDepth
+        // Fill the complete target height, including the part hidden behind the
+        // hardware notch. The previous short rounded rectangle ended below the
+        // notch and exposed two empty wedges at its upper corners.
         let revealRect = CGRect(
-            x: bounds.minX + ShelfNotchMetrics.dropTargetHorizontalInset,
+            x: bounds.minX
+                + ShelfNotchMetrics.dropTargetHorizontalInset
+                - ShelfNotchMetrics.dropHighlightLeftExtension,
             y: bounds.minY,
-            width: bounds.width - ShelfNotchMetrics.dropTargetHorizontalInset * 2,
-            height: revealDepth + 8
+            width: bounds.width
+                - ShelfNotchMetrics.dropTargetHorizontalInset * 2
+                + ShelfNotchMetrics.dropHighlightLeftExtension,
+            height: bounds.height
         )
-        let path = NSBezierPath(roundedRect: revealRect, xRadius: 13, yRadius: 13)
-        NSColor.black.withAlphaComponent(0.94).setFill()
-        path.fill()
-        NSColor.controlAccentColor.withAlphaComponent(0.75).setStroke()
-        path.lineWidth = 2
-        path.stroke()
+        let path = ShelfNotchDropHighlightPath.make(
+            in: revealRect,
+            bottomCornerRadius: ShelfNotchMetrics.dropHighlightBottomCornerRadius
+        )
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+
+        context.saveGState()
+        context.addPath(path)
+        context.setFillColor(NSColor.black.withAlphaComponent(0.94).cgColor)
+        let strokeColor: NSColor = fileDropMode == .paths ? .systemCyan : .controlAccentColor
+        context.setStrokeColor(strokeColor.withAlphaComponent(0.75).cgColor)
+        context.setLineWidth(2)
+        context.drawPath(using: .fillStroke)
+        context.restoreGState()
     }
 
     private func updateTarget(_ sender: NSDraggingInfo) -> NSDragOperation {
-        guard !ShelfSurface.SurfaceView.contents(from: sender.draggingPasteboard).isEmpty else {
+        updateFileDropMode(for: sender)
+        guard ShelfSurface.SurfaceView.canAcceptContents(
+            from: sender.draggingPasteboard
+        ) else {
             isTargeted = false
             return []
         }
@@ -237,5 +291,65 @@ private final class ShelfNotchDropTargetView: NSView {
             ShelfHaptics.alignment()
         }
         return .copy
+    }
+
+    private var fileDropMode: ShelfFileDropMode = .files
+    private var activeDraggingSequenceNumber: Int?
+    private var hasLatchedPathOnlyDrop = false
+    private var preparedPayload: PreparedDropPayload?
+
+    private func contents(for sender: NSDraggingInfo) -> [ShelfItem.Content] {
+        let sequenceNumber = sender.draggingSequenceNumber
+        if let preparedPayload,
+           preparedPayload.sequenceNumber == sequenceNumber,
+           preparedPayload.mode == fileDropMode {
+            return preparedPayload.contents
+        }
+
+        let contents = ShelfSurface.SurfaceView.contents(
+            from: sender.draggingPasteboard,
+            fileDropMode: fileDropMode
+        )
+        preparedPayload = PreparedDropPayload(
+            sequenceNumber: sequenceNumber,
+            mode: fileDropMode,
+            contents: contents
+        )
+        return contents
+    }
+
+    private func updateFileDropMode(for sender: NSDraggingInfo) {
+        if activeDraggingSequenceNumber != sender.draggingSequenceNumber {
+            activeDraggingSequenceNumber = sender.draggingSequenceNumber
+            hasLatchedPathOnlyDrop = false
+        }
+
+        let newMode = ShelfNotchDropController.fileDropMode(
+            modifierFlags: NSEvent.modifierFlags,
+            pasteboard: sender.draggingPasteboard,
+            prefersPathOnlyDrop: prefersPathOnlyDrop
+                || ShelfActiveDragIntent.prefersPathOnlyDrop
+        )
+        if newMode == .paths {
+            hasLatchedPathOnlyDrop = true
+        }
+        let resolvedMode: ShelfFileDropMode = hasLatchedPathOnlyDrop ? .paths : .files
+        guard resolvedMode != fileDropMode else { return }
+        fileDropMode = resolvedMode
+        needsDisplay = true
+        ShelfHaptics.alignment()
+    }
+
+    private func resetDragSession() {
+        fileDropMode = .files
+        activeDraggingSequenceNumber = nil
+        hasLatchedPathOnlyDrop = false
+        preparedPayload = nil
+    }
+
+    private struct PreparedDropPayload {
+        let sequenceNumber: Int
+        let mode: ShelfFileDropMode
+        let contents: [ShelfItem.Content]
     }
 }

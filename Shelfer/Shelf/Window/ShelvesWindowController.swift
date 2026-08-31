@@ -32,8 +32,12 @@ final class ShelvesWindowController {
         withObservationTracking {
             let shelfStores = Array(store.scope(\.shelves, action: \.shelves))
             let isDragActive = store.isDragActive
+            let activeDragPrefersPathOnlyDrop = store.activeDragPrefersPathOnlyDrop
             sync(to: shelfStores)
-            notchDropController.setDragActive(isDragActive)
+            notchDropController.setDragActive(
+                isDragActive,
+                prefersPathOnlyDrop: activeDragPrefersPathOnlyDrop
+            )
         } onChange: {
             // Observation reports before the collection has applied its change.
             Task { @MainActor [weak self] in self?.observe() }

@@ -82,7 +82,7 @@ final class TextFilePromise: NSFilePromiseProvider, NSFilePromiseProviderDelegat
 
     /// Names the file after its opening words, so a shelf full of snippets doesn't
     /// land as "Untitled 1, 2, 3…".
-    static func fileName(for text: String) -> String {
+    nonisolated static func fileName(for text: String) -> String {
         let firstLine = text
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .components(separatedBy: .newlines)

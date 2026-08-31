@@ -13,9 +13,9 @@ import Testing
 @MainActor
 struct ShelvesFeatureTests {
     private func makeStore(
-        _ state: ShelvesFeature.State = ShelvesFeature.State()
+        _ state: ShelvesFeature.State? = nil
     ) -> TestStore<ShelvesFeature.State, ShelvesFeature.Action> {
-        TestStore(initialState: state) {
+        TestStore(initialState: state ?? ShelvesFeature.State()) {
             ShelvesFeature()
         } withDependencies: {
             $0.uuid = .incrementing
@@ -41,7 +41,7 @@ struct ShelvesFeatureTests {
             )
         )
 
-        await store.send(.shelfRequested(newPosition)) {
+        await store.send(.shelfRequested(newPosition, prefersPathOnlyDrop: false)) {
             $0.shelves.append(
                 ShelfFeature.State(
                     id: UUID(0),
@@ -66,7 +66,7 @@ struct ShelvesFeatureTests {
         let store = makeStore(ShelvesFeature.State(shelves: [existing]))
         let point = CGPoint(x: 400, y: 300)
 
-        await store.send(.shelfRequested(point)) {
+        await store.send(.shelfRequested(point, prefersPathOnlyDrop: false)) {
             $0.shelves.append(
                 ShelfFeature.State(id: UUID(0), isPresented: true, position: point)
             )
@@ -86,6 +86,24 @@ struct ShelvesFeatureTests {
         #expect(store.state.shelves.count == 2)
         #expect(store.state.shelves[id: UUID(99)]?.items == [ShelfItem(.text("existing"))])
         #expect(store.state.shelves[id: UUID(0)]?.items == [ShelfItem(.text("new"))])
+    }
+
+    @Test func optionIntentBeforeSummoningIsPreservedByTheNewShelf() async {
+        let point = CGPoint(x: 420, y: 260)
+        let store = makeStore(ShelvesFeature.State(isDragActive: true))
+
+        await store.send(.shelfRequested(point, prefersPathOnlyDrop: true)) {
+            $0.shelves.append(
+                ShelfFeature.State(
+                    id: UUID(0),
+                    isPresented: true,
+                    position: point,
+                    isDragActive: true,
+                    prefersPathOnlyDrop: true
+                )
+            )
+            $0.pendingShelfID = UUID(0)
+        }
     }
 
     @Test func anUnusedNewShelfIsRemovedWithoutTouchingExistingShelves() async {
@@ -121,11 +139,62 @@ struct ShelvesFeatureTests {
             ])
         )
 
-        await store.send(.dragActivityChanged(true)) {
+        await store.send(.dragActivityChanged(true, prefersPathOnlyDrop: false)) {
             $0.isDragActive = true
             $0.shelves[id: UUID(10)]?.isDragActive = true
             $0.shelves[id: UUID(11)]?.isDragActive = true
         }
+    }
+
+    @Test func globalOptionIntentIsAvailableToTheNotchDropController() async {
+        let store = makeStore()
+
+        await store.send(.dragActivityChanged(true, prefersPathOnlyDrop: true)) {
+            $0.isDragActive = true
+            $0.activeDragPrefersPathOnlyDrop = true
+        }
+
+        await store.send(.dragActivityChanged(false, prefersPathOnlyDrop: false)) {
+            $0.isDragActive = false
+            $0.activeDragPrefersPathOnlyDrop = false
+        }
+    }
+
+    @Test func serviceFilesCreateANewShelfAtThePointer() async {
+        let existing = ShelfFeature.State(
+            id: UUID(99),
+            items: [ShelfItem(.text("existing"))],
+            isPresented: true
+        )
+        let point = CGPoint(x: 820, y: 640)
+        let urls = [
+            URL(fileURLWithPath: "/tmp/first.pdf"),
+            URL(fileURLWithPath: "/tmp/second.png"),
+        ]
+        let contents = urls.map(ShelfItem.Content.file)
+        let store = makeStore(
+            ShelvesFeature.State(shelves: [existing])
+        )
+
+        await store.send(.externalItemsRequested(contents, point)) {
+            $0.shelves.append(
+                ShelfFeature.State(
+                    id: UUID(0),
+                    isPresented: true,
+                    position: point
+                )
+            )
+        }
+        await store.receive(
+            .shelves(.element(id: UUID(0), action: .itemsDropped(contents)))
+        ) {
+            for url in urls {
+                $0.shelves[id: UUID(0)]?.items.append(ShelfItem(.file(url)))
+            }
+        }
+
+        #expect(store.state.shelves[id: existing.id] == existing)
+        #expect(store.state.shelves[id: UUID(0)]?.items.count == 2)
     }
 
     @Test func droppingDirectlyOnANotchCreatesAStoredShelf() async {
@@ -166,7 +235,7 @@ struct ShelvesFeatureTests {
         ) {
             $0.shelves[id: UUID(0)]?.notchDock = ShelfNotchDock(
                 target: target,
-                presentation: .attached
+                presentation: .retracting
             )
         }
         await store.send(
@@ -209,7 +278,7 @@ struct ShelvesFeatureTests {
         await store.receive(
             .shelves(.element(id: shelfID, action: .notchDockRequested(target)))
         ) {
-            $0.shelves[id: shelfID]?.notchDock?.presentation = .attached
+            $0.shelves[id: shelfID]?.notchDock?.presentation = .retracting
         }
         await store.send(
             .shelves(.element(id: shelfID, action: .notchUndockRequested))
@@ -235,6 +304,112 @@ struct ShelvesFeatureTests {
         }
 
         #expect(store.state.shelves.count == 2)
+    }
+
+    @Test func menuHideUsesEachShelfsCompleteCleanupPath() async {
+        let first = ShelfItem(.file(URL(fileURLWithPath: "/tmp/selected.txt")))
+        let firstID = UUID(10)
+        let secondID = UUID(11)
+        let store = makeStore(
+            ShelvesFeature.State(shelves: [
+                ShelfFeature.State(
+                    id: firstID,
+                    items: [first],
+                    isPresented: true,
+                    dockedEdge: .left,
+                    isExpanded: true,
+                    selectedItemIDs: [first.id]
+                ),
+                ShelfFeature.State(
+                    id: secondID,
+                    items: [ShelfItem(.text("kept"))],
+                    isPresented: true,
+                    dockedEdge: .right
+                ),
+            ])
+        )
+
+        await store.send(.hideRequested)
+        await store.receive(
+            .shelves(.element(id: firstID, action: .hideRequested))
+        ) {
+            $0.shelves[id: firstID]?.isPresented = false
+            $0.shelves[id: firstID]?.dockedEdge = nil
+            $0.shelves[id: firstID]?.selectedItemIDs = []
+        }
+        await store.receive(
+            .shelves(.element(id: secondID, action: .hideRequested))
+        ) {
+            $0.shelves[id: secondID]?.isPresented = false
+            $0.shelves[id: secondID]?.dockedEdge = nil
+        }
+
+        #expect(store.state.shelves[id: firstID]?.items == [first])
+        #expect(store.state.shelves[id: firstID]?.isExpanded == true)
+        #expect(store.state.shelves[id: secondID]?.items == [ShelfItem(.text("kept"))])
+    }
+
+    @Test func notchDropOnAnotherDisplayCreatesAnotherStoredShelf() async {
+        let firstTarget = ShelfNotchTarget(
+            displayID: 1,
+            screenFrame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+            notchFrame: CGRect(x: 676, y: 950, width: 160, height: 32)
+        )
+        let secondTarget = ShelfNotchTarget(
+            displayID: 2,
+            screenFrame: CGRect(x: 1512, y: 0, width: 1512, height: 982),
+            notchFrame: CGRect(x: 2188, y: 950, width: 160, height: 32)
+        )
+        let existingID = UUID(99)
+        let existing = ShelfFeature.State(
+            id: existingID,
+            items: [ShelfItem(.text("first display"))],
+            isPresented: true,
+            notchDock: ShelfNotchDock(target: firstTarget, presentation: .stowed)
+        )
+        let clock = TestClock()
+        let store = TestStore(
+            initialState: ShelvesFeature.State(shelves: [existing])
+        ) {
+            ShelvesFeature()
+        } withDependencies: {
+            $0.uuid = .incrementing
+            $0.continuousClock = clock
+        }
+
+        let content = ShelfItem.Content.path("/tmp/second-display.txt")
+        await store.send(.notchItemsDropped(secondTarget, [content])) {
+            $0.shelves.append(
+                ShelfFeature.State(
+                    id: UUID(0),
+                    isPresented: true,
+                    position: CGPoint(
+                        x: secondTarget.notchFrame.midX,
+                        y: secondTarget.notchFrame.minY - ShelfMetrics.size.height / 2
+                    )
+                )
+            )
+        }
+        await store.receive(
+            .shelves(.element(id: UUID(0), action: .itemsDropped([content])))
+        ) {
+            $0.shelves[id: UUID(0)]?.items = [ShelfItem(content)]
+        }
+        await store.receive(
+            .shelves(.element(id: UUID(0), action: .notchDockRequested(secondTarget)))
+        ) {
+            $0.shelves[id: UUID(0)]?.notchDock = ShelfNotchDock(
+                target: secondTarget,
+                presentation: .retracting
+            )
+        }
+
+        #expect(store.state.shelves[id: existingID] == existing)
+        await store.send(
+            .shelves(.element(id: UUID(0), action: .notchUndockRequested))
+        ) {
+            $0.shelves[id: UUID(0)]?.notchDock = nil
+        }
     }
 
     @Test func closingOneShelfRemovesOnlyThatShelf() async {
@@ -283,14 +458,14 @@ struct ShelvesFeatureTests {
 
         let task = await store.send(.task)
 
-        continuation.yield(.activityChanged(true))
-        await store.receive(.dragActivityChanged(true)) {
+        continuation.yield(.activityChanged(true, prefersPathOnlyDrop: false))
+        await store.receive(.dragActivityChanged(true, prefersPathOnlyDrop: false)) {
             $0.isDragActive = true
             $0.shelves[id: existing.id]?.isDragActive = true
         }
 
-        continuation.yield(.shelfRequested(point))
-        await store.receive(.shelfRequested(point)) {
+        continuation.yield(.shelfRequested(point, prefersPathOnlyDrop: false))
+        await store.receive(.shelfRequested(point, prefersPathOnlyDrop: false)) {
             $0.shelves.append(
                 ShelfFeature.State(
                     id: UUID(0),

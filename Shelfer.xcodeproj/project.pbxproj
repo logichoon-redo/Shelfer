@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		63A8BD2730354A6E002D8E5F /* ComposableArchitecture in Frameworks */ = {isa = PBXBuildFile; productRef = 63A8BD2630354A6E002D8E5F /* ComposableArchitecture */; };
+		63A8BE0030390000002D8E5F /* ShelferFinderSync.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = 63A8BE0230390000002D8E5F /* ShelferFinderSync.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -25,13 +26,45 @@
 			remoteGlobalIDString = 63A8BC12302E9ACF002D8E5F;
 			remoteInfo = Shelfer;
 		};
+		63A8BE0130390000002D8E5F /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 63A8BC0B302E9ACF002D8E5F /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 63A8BE0630390000002D8E5F;
+			remoteInfo = ShelferFinderSync;
+		};
 /* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		63A8BE0530390000002D8E5F /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				63A8BE0030390000002D8E5F /* ShelferFinderSync.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		63A8BC13302E9ACF002D8E5F /* Shelfer.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Shelfer.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		63A8BC22302E9AD2002D8E5F /* ShelferTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ShelferTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		63A8BC2C302E9AD2002D8E5F /* ShelferUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = ShelferUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		63A8BE0230390000002D8E5F /* ShelferFinderSync.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShelferFinderSync.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		63A8BE0D30390000002D8E5F /* Exceptions for "ShelferFinderSync" folder in "ShelferFinderSync" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = 63A8BE0630390000002D8E5F /* ShelferFinderSync */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		63A8BC15302E9ACF002D8E5F /* Shelfer */ = {
@@ -47,6 +80,14 @@
 		63A8BC2F302E9AD2002D8E5F /* ShelferUITests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = ShelferUITests;
+			sourceTree = "<group>";
+		};
+		63A8BE0330390000002D8E5F /* ShelferFinderSync */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				63A8BE0D30390000002D8E5F /* Exceptions for "ShelferFinderSync" folder in "ShelferFinderSync" target */,
+			);
+			path = ShelferFinderSync;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -74,6 +115,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		63A8BE0430390000002D8E5F /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -81,6 +129,7 @@
 			isa = PBXGroup;
 			children = (
 				63A8BC15302E9ACF002D8E5F /* Shelfer */,
+				63A8BE0330390000002D8E5F /* ShelferFinderSync */,
 				63A8BC25302E9AD2002D8E5F /* ShelferTests */,
 				63A8BC2F302E9AD2002D8E5F /* ShelferUITests */,
 				63A8BC14302E9ACF002D8E5F /* Products */,
@@ -91,6 +140,7 @@
 			isa = PBXGroup;
 			children = (
 				63A8BC13302E9ACF002D8E5F /* Shelfer.app */,
+				63A8BE0230390000002D8E5F /* ShelferFinderSync.appex */,
 				63A8BC22302E9AD2002D8E5F /* ShelferTests.xctest */,
 				63A8BC2C302E9AD2002D8E5F /* ShelferUITests.xctest */,
 			);
@@ -107,10 +157,12 @@
 				63A8BC0F302E9ACF002D8E5F /* Sources */,
 				63A8BC10302E9ACF002D8E5F /* Frameworks */,
 				63A8BC11302E9ACF002D8E5F /* Resources */,
+				63A8BE0530390000002D8E5F /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				63A8BE0930390000002D8E5F /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				63A8BC15302E9ACF002D8E5F /* Shelfer */,
@@ -169,6 +221,28 @@
 			productReference = 63A8BC2C302E9AD2002D8E5F /* ShelferUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		63A8BE0630390000002D8E5F /* ShelferFinderSync */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 63A8BE0C30390000002D8E5F /* Build configuration list for PBXNativeTarget "ShelferFinderSync" */;
+			buildPhases = (
+				63A8BE0830390000002D8E5F /* Sources */,
+				63A8BE0430390000002D8E5F /* Frameworks */,
+				63A8BE0730390000002D8E5F /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				63A8BE0330390000002D8E5F /* ShelferFinderSync */,
+			);
+			name = ShelferFinderSync;
+			packageProductDependencies = (
+			);
+			productName = ShelferFinderSync;
+			productReference = 63A8BE0230390000002D8E5F /* ShelferFinderSync.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -190,6 +264,9 @@
 						CreatedOnToolsVersion = 26.6;
 						TestTargetID = 63A8BC12302E9ACF002D8E5F;
 					};
+					63A8BE0630390000002D8E5F = {
+						CreatedOnToolsVersion = 26.6;
+					};
 				};
 			};
 			buildConfigurationList = 63A8BC0E302E9ACF002D8E5F /* Build configuration list for PBXProject "Shelfer" */;
@@ -210,6 +287,7 @@
 			projectRoot = "";
 			targets = (
 				63A8BC12302E9ACF002D8E5F /* Shelfer */,
+				63A8BE0630390000002D8E5F /* ShelferFinderSync */,
 				63A8BC21302E9AD2002D8E5F /* ShelferTests */,
 				63A8BC2B302E9AD2002D8E5F /* ShelferUITests */,
 			);
@@ -232,6 +310,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		63A8BC2A302E9AD2002D8E5F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		63A8BE0730390000002D8E5F /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -262,6 +347,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		63A8BE0830390000002D8E5F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
@@ -274,6 +366,11 @@
 			isa = PBXTargetDependency;
 			target = 63A8BC12302E9ACF002D8E5F /* Shelfer */;
 			targetProxy = 63A8BC2D302E9AD2002D8E5F /* PBXContainerItemProxy */;
+		};
+		63A8BE0930390000002D8E5F /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 63A8BE0630390000002D8E5F /* ShelferFinderSync */;
+			targetProxy = 63A8BE0130390000002D8E5F /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -378,6 +475,7 @@
 				COPY_PHASE_STRIP = NO;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				DEVELOPMENT_TEAM = GHGPAZGBBT;
+				ENABLE_CODE_COVERAGE = NO;
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = YES;
@@ -411,10 +509,8 @@
 				DEVELOPMENT_TEAM = GHGPAZGBBT;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Shelfer;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Shelfer-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -443,10 +539,8 @@
 				DEVELOPMENT_TEAM = GHGPAZGBBT;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
-				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_CFBundleDisplayName = Shelfer;
-				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.developer-tools";
-				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Shelfer-Info.plist";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
@@ -541,6 +635,60 @@
 			};
 			name = Release;
 		};
+		63A8BE0A30390000002D8E5F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = ShelferFinderSync/ShelferFinderSync.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = GHGPAZGBBT;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ShelferFinderSync/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = shelfer.com.Shelfer.FinderSync;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		63A8BE0B30390000002D8E5F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = ShelferFinderSync/ShelferFinderSync.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = GHGPAZGBBT;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ShelferFinderSync/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = shelfer.com.Shelfer.FinderSync;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = nonisolated;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -576,6 +724,15 @@
 			buildConfigurations = (
 				63A8BC3D302E9AD2002D8E5F /* Debug */,
 				63A8BC3E302E9AD2002D8E5F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		63A8BE0C30390000002D8E5F /* Build configuration list for PBXNativeTarget "ShelferFinderSync" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				63A8BE0A30390000002D8E5F /* Debug */,
+				63A8BE0B30390000002D8E5F /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

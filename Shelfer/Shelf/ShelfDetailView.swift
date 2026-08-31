@@ -52,20 +52,22 @@ struct ShelfDetailView: View {
 
             Spacer(minLength: 8)
 
-            HStack(spacing: 8) {
-                circleButton(
-                    systemImage: "square.grid.2x2.fill",
-                    label: "Grid view",
-                    isSelected: store.layout == .grid
-                ) {
-                    store.send(.layoutChanged(.grid))
-                }
-                circleButton(
-                    systemImage: "list.bullet",
-                    label: "List view",
-                    isSelected: store.layout == .list
-                ) {
-                    store.send(.layoutChanged(.list))
+            GlassEffectContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    circleButton(
+                        systemImage: "square.grid.2x2.fill",
+                        label: "Grid view",
+                        isSelected: store.layout == .grid
+                    ) {
+                        store.send(.layoutChanged(.grid))
+                    }
+                    circleButton(
+                        systemImage: "list.bullet",
+                        label: "List view",
+                        isSelected: store.layout == .list
+                    ) {
+                        store.send(.layoutChanged(.list))
+                    }
                 }
             }
         }
@@ -83,20 +85,13 @@ struct ShelfDetailView: View {
         isSelected: Bool = false,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white)
-                .frame(
-                    width: ShelfDetailMetrics.buttonDiameter,
-                    height: ShelfDetailMetrics.buttonDiameter
-                )
-                .background(Circle().fill(.white.opacity(isSelected ? 0.28 : 0.14)))
-        }
-        .buttonStyle(.plain)
-        .shelfHoverHighlight()
-        .focusEffectDisabled()
-        .accessibilityLabel(label)
+        ShelfCircularButton(
+            systemImage: systemImage,
+            label: label,
+            diameter: ShelfDetailMetrics.buttonDiameter,
+            isSelected: isSelected,
+            action: action
+        )
     }
 
     // MARK: - Content
@@ -110,10 +105,19 @@ struct ShelfDetailView: View {
     }
 
     private var gridContent: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(alignment: .top, spacing: 22) {
+        let selectedItemIDs = store.selectedItemIDs
+        let selectedItems = Array(
+            store.items.filter { selectedItemIDs.contains($0.id) }
+        )
+
+        return ScrollView(.horizontal, showsIndicators: false) {
+            LazyHStack(alignment: .top, spacing: 22) {
                 ForEach(store.items) { item in
-                    gridTile(for: item)
+                    gridTile(
+                        for: item,
+                        selectedItemIDs: selectedItemIDs,
+                        selectedItems: selectedItems
+                    )
                 }
                 revealTile
             }
@@ -126,7 +130,11 @@ struct ShelfDetailView: View {
         }
     }
 
-    private func gridTile(for item: ShelfItem) -> some View {
+    private func gridTile(
+        for item: ShelfItem,
+        selectedItemIDs: Set<ShelfItem.ID>,
+        selectedItems: [ShelfItem]
+    ) -> some View {
         VStack(spacing: 8) {
             ShelfItemIcon(item: item, size: ShelfDetailMetrics.thumbnailSize)
 
@@ -143,14 +151,36 @@ struct ShelfDetailView: View {
             }
             .frame(width: ShelfDetailMetrics.tileWidth)
         }
-        .overlay {
-            itemDragSource(for: item)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 5)
+        .background {
+            selectionBackground(for: item, cornerRadius: 14)
         }
+        .overlay {
+            itemDragSource(
+                for: item,
+                selectedItemIDs: selectedItemIDs,
+                selectedItems: selectedItems
+            )
+        }
+        .overlay {
+            copyFeedback(for: item)
+        }
+        .animation(
+            .easeOut(duration: 0.15),
+            value: store.copyFeedbackTarget == .item(item.id)
+        )
+        .animation(.easeOut(duration: 0.12), value: isSelected(item))
     }
 
     private var listContent: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(spacing: 10) {
+        let selectedItemIDs = store.selectedItemIDs
+        let selectedItems = Array(
+            store.items.filter { selectedItemIDs.contains($0.id) }
+        )
+
+        return ScrollView(showsIndicators: false) {
+            LazyVStack(spacing: 10) {
                 ForEach(store.items) { item in
                     HStack(spacing: 10) {
                         ShelfItemIcon(item: item, size: 28)
@@ -168,10 +198,27 @@ struct ShelfDetailView: View {
 
                         Spacer(minLength: 0)
                     }
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .overlay {
-                        itemDragSource(for: item)
+                    .background {
+                        selectionBackground(for: item, cornerRadius: 9)
                     }
+                    .overlay {
+                        itemDragSource(
+                            for: item,
+                            selectedItemIDs: selectedItemIDs,
+                            selectedItems: selectedItems
+                        )
+                    }
+                    .overlay {
+                        copyFeedback(for: item)
+                    }
+                    .animation(
+                        .easeOut(duration: 0.15),
+                        value: store.copyFeedbackTarget == .item(item.id)
+                    )
+                    .animation(.easeOut(duration: 0.12), value: isSelected(item))
                 }
 
                 revealRow
@@ -186,13 +233,58 @@ struct ShelfDetailView: View {
     /// Items own their pixels: dragging one exports that item's payload, while
     /// a native double-click copies it. The row background behind these sources
     /// is reserved for moving the shelf window.
-    private func itemDragSource(for item: ShelfItem) -> some View {
-        ShelfDragSource(
-            contents: [item.content],
+    private func itemDragSource(
+        for item: ShelfItem,
+        selectedItemIDs: Set<ShelfItem.ID>,
+        selectedItems: [ShelfItem]
+    ) -> some View {
+        let targetedItems: [ShelfItem] = selectedItemIDs.contains(item.id)
+            ? selectedItems
+            : [item]
+        let targetedContents: [ShelfItem.Content] = targetedItems.map(\.content)
+
+        return ShelfDragSource(
+            contents: targetedContents,
             onCompleted: { store.send(.itemsDraggedOut($0)) },
             onDragActiveChange: { store.send(.shelfDragActivityChanged($0)) },
-            onDoubleClick: { store.send(.itemDoubleClicked(item.id)) }
+            onSelection: { store.send(.itemSelectionToggled(item.id)) },
+            onContextMenu: { store.send(.itemContextMenuRequested(item.id)) },
+            onDoubleClick: { store.send(.itemDoubleClicked(item.id)) },
+            onCopy: {
+                store.send(.itemsCopyRequested($0, .item(item.id)))
+            },
+            onShare: { store.send(.shareItemsRequested($0, targetedContents)) },
+            onShowInFinder: { store.send(.revealItemsInFinderRequested($0)) },
+            onKeepPathsOnly: {
+                store.send(.itemsConvertToPathsRequested(Set(targetedItems.map(\.id))))
+            },
+            onClear: {
+                store.send(.itemsClearRequested(Set(targetedItems.map(\.id))))
+            }
         )
+    }
+
+    private func isSelected(_ item: ShelfItem) -> Bool {
+        store.selectedItemIDs.contains(item.id)
+    }
+
+    @ViewBuilder
+    private func selectionBackground(for item: ShelfItem, cornerRadius: CGFloat) -> some View {
+        if isSelected(item) {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .fill(Color.accentColor.opacity(0.2))
+                .overlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.accentColor.opacity(0.9), lineWidth: 1.5)
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func copyFeedback(for item: ShelfItem) -> some View {
+        if store.copyFeedbackTarget == .item(item.id) {
+            CopiedBadge()
+        }
     }
 
     private var revealTile: some View {
@@ -207,13 +299,14 @@ struct ShelfDetailView: View {
                         width: ShelfDetailMetrics.thumbnailSize,
                         height: ShelfDetailMetrics.thumbnailSize
                     )
-                    .background(Circle().fill(.white.opacity(0.14)))
+                    .glassEffect(.regular.interactive(), in: .circle)
 
                 Text("Reveal in Finder")
                     .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(.white)
                     .frame(width: ShelfDetailMetrics.tileWidth)
             }
+            .contentShape(.interaction, Rectangle())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -230,7 +323,7 @@ struct ShelfDetailView: View {
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(.white.opacity(0.85))
                     .frame(width: 28, height: 28)
-                    .background(Circle().fill(.white.opacity(0.14)))
+                    .glassEffect(.regular.interactive(), in: .circle)
 
                 Text("Reveal in Finder")
                     .font(.system(size: 13, weight: .semibold))
@@ -238,6 +331,7 @@ struct ShelfDetailView: View {
 
                 Spacer(minLength: 0)
             }
+            .contentShape(.interaction, Rectangle())
         }
         .buttonStyle(.plain)
         .focusEffectDisabled()
@@ -262,6 +356,8 @@ struct ShelfDetailView: View {
             noun = count == 1 ? "Image" : "Images"
         } else if items.allSatisfy({ $0.url != nil }) {
             noun = count == 1 ? "File" : "Files"
+        } else if items.allSatisfy({ $0.path != nil }) {
+            noun = count == 1 ? "Path" : "Paths"
         } else if items.allSatisfy({ $0.url == nil }) {
             noun = count == 1 ? "Snippet" : "Snippets"
         } else {
@@ -272,6 +368,9 @@ struct ShelfDetailView: View {
     }
 
     private var totalSize: String {
+        if store.items.allSatisfy({ $0.path != nil }) {
+            return "Path only"
+        }
         let bytes = store.items.reduce(Int64(0)) { total, item in
             total + byteCount(for: item)
         }
@@ -279,6 +378,7 @@ struct ShelfDetailView: View {
     }
 
     private func subtitle(for item: ShelfItem) -> String {
+        if item.path != nil { return "Path only" }
         let size = Self.formatted(bytes: byteCount(for: item))
         guard let pixels = infos[item.id]?.pixelSize else { return size }
         return "\(size) • \(Int(pixels.width))x\(Int(pixels.height))"
@@ -286,9 +386,12 @@ struct ShelfDetailView: View {
 
     private func byteCount(for item: ShelfItem) -> Int64 {
         if let info = infos[item.id] { return info.byteCount }
-        // Text never hits the filesystem, so measure the string itself.
-        if case let .text(text) = item.content { return Int64(text.utf8.count) }
-        return 0
+        // Text and paths never hit the filesystem, so measure the string itself.
+        switch item.content {
+        case let .path(path): return Int64(path.utf8.count)
+        case let .text(text): return Int64(text.utf8.count)
+        case .file: return 0
+        }
     }
 
     private static func formatted(bytes: Int64) -> String {
@@ -296,13 +399,49 @@ struct ShelfDetailView: View {
     }
 
     private func loadInfos() async {
+        let fileItems = store.items.compactMap { item -> (ShelfItem.ID, URL)? in
+            guard let url = item.url else { return nil }
+            return (item.id, url)
+        }
+        let loadInfo = fileInfo.info
         var loaded: [ShelfItem.ID: FileInfo] = [:]
-        for item in store.items {
-            guard let url = item.url else { continue }
-            if let info = await fileInfo.info(url) {
-                loaded[item.id] = info
+        loaded.reserveCapacity(fileItems.count)
+
+        // A small pool keeps local disks busy without flooding iCloud,
+        // network volumes, or ImageIO with one task per dropped file.
+        await withTaskGroup(of: (ShelfItem.ID, FileInfo?).self) { group in
+            let initialCount = min(
+                fileItems.count,
+                ShelfDetailMetrics.maximumConcurrentMetadataLoads
+            )
+            for index in 0..<initialCount {
+                let (id, url) = fileItems[index]
+                group.addTask {
+                    (id, await loadInfo(url))
+                }
+            }
+
+            var nextIndex = initialCount
+            while let (id, info) = await group.next() {
+                if Task.isCancelled {
+                    group.cancelAll()
+                    return
+                }
+                if let info {
+                    loaded[id] = info
+                }
+
+                if nextIndex < fileItems.count {
+                    let (nextID, nextURL) = fileItems[nextIndex]
+                    nextIndex += 1
+                    group.addTask {
+                        (nextID, await loadInfo(nextURL))
+                    }
+                }
             }
         }
+
+        guard !Task.isCancelled else { return }
         infos = loaded
     }
 }
@@ -314,6 +453,7 @@ enum ShelfDetailMetrics {
     static let buttonDiameter = ShelfMetrics.buttonDiameter
     static let thumbnailSize: CGFloat = 72
     static let tileWidth: CGFloat = 116
+    static let maximumConcurrentMetadataLoads = 6
 }
 
 /// Turns only the background beneath detail content into a panel drag handle.

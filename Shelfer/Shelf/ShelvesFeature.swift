@@ -16,6 +16,7 @@ struct ShelvesFeature {
     struct State: Equatable {
         var shelves: IdentifiedArrayOf<ShelfFeature.State> = []
         var isDragActive = false
+        var activeDragPrefersPathOnlyDrop = false
 
         /// The empty shelf created for the current drag. It is discarded if the
         /// drag ends without landing content on that shelf.
@@ -28,9 +29,10 @@ struct ShelvesFeature {
 
     enum Action: Equatable {
         case task
-        case dragActivityChanged(Bool)
-        case shelfRequested(CGPoint)
+        case dragActivityChanged(Bool, prefersPathOnlyDrop: Bool)
+        case shelfRequested(CGPoint, prefersPathOnlyDrop: Bool)
         case showRequested(CGPoint)
+        case externalItemsRequested([ShelfItem.Content], CGPoint)
         case notchItemsDropped(ShelfNotchTarget, [ShelfItem.Content])
         case dragEnded
         case shelves(IdentifiedActionOf<ShelfFeature>)
@@ -48,24 +50,35 @@ struct ShelvesFeature {
                 return .run { send in
                     for await event in await dragMonitor.events() {
                         switch event {
-                        case let .activityChanged(isActive):
-                            await send(.dragActivityChanged(isActive))
-                        case let .shelfRequested(point):
-                            await send(.shelfRequested(point))
+                        case let .activityChanged(isActive, prefersPathOnlyDrop):
+                            await send(
+                                .dragActivityChanged(
+                                    isActive,
+                                    prefersPathOnlyDrop: prefersPathOnlyDrop
+                                )
+                            )
+                        case let .shelfRequested(point, prefersPathOnlyDrop):
+                            await send(
+                                .shelfRequested(
+                                    point,
+                                    prefersPathOnlyDrop: prefersPathOnlyDrop
+                                )
+                            )
                         case .dragEnded:
                             await send(.dragEnded)
                         }
                     }
                 }
 
-            case let .dragActivityChanged(isActive):
+            case let .dragActivityChanged(isActive, prefersPathOnlyDrop):
                 state.isDragActive = isActive
+                state.activeDragPrefersPathOnlyDrop = isActive && prefersPathOnlyDrop
                 for id in state.shelves.ids {
                     state.shelves[id: id]?.isDragActive = isActive
                 }
                 return .none
 
-            case let .shelfRequested(point):
+            case let .shelfRequested(point, prefersPathOnlyDrop):
                 // A newer summon supersedes only an older, still-unused pending
                 // shelf. Shelves that already contain content are never moved or
                 // replaced by this event.
@@ -80,7 +93,8 @@ struct ShelvesFeature {
                         id: id,
                         isPresented: true,
                         position: point,
-                        isDragActive: state.isDragActive
+                        isDragActive: state.isDragActive,
+                        prefersPathOnlyDrop: prefersPathOnlyDrop
                     )
                 )
                 state.pendingShelfID = id
@@ -103,6 +117,35 @@ struct ShelvesFeature {
                     state.shelves[id: id]?.isPresented = true
                 }
                 return .none
+
+            case let .externalItemsRequested(contents, point):
+                guard !contents.isEmpty else { return .none }
+
+                // A service invocation represents a complete payload, so it
+                // replaces only an unused shelf left pending by a drag gesture.
+                if let pendingShelfID = state.pendingShelfID,
+                   state.shelves[id: pendingShelfID]?.isEmpty == true {
+                    state.shelves.remove(id: pendingShelfID)
+                }
+                state.pendingShelfID = nil
+
+                let shelfID = uuid()
+                state.shelves.append(
+                    ShelfFeature.State(
+                        id: shelfID,
+                        isPresented: true,
+                        position: point,
+                        isDragActive: state.isDragActive
+                    )
+                )
+                return .send(
+                    .shelves(
+                        .element(
+                            id: shelfID,
+                            action: .itemsDropped(contents)
+                        )
+                    )
+                )
 
             case let .notchItemsDropped(target, contents):
                 guard !contents.isEmpty else { return .none }
@@ -136,6 +179,7 @@ struct ShelvesFeature {
 
             case .dragEnded:
                 state.isDragActive = false
+                state.activeDragPrefersPathOnlyDrop = false
                 for id in state.shelves.ids {
                     state.shelves[id: id]?.isDragActive = false
                 }
@@ -172,12 +216,19 @@ struct ShelvesFeature {
                 return .none
 
             case .hideRequested:
-                for id in state.shelves.ids {
-                    state.shelves[id: id]?.isPresented = false
-                    state.shelves[id: id]?.dockedEdge = nil
-                    state.shelves[id: id]?.notchDock = nil
-                }
-                return .none
+                // Route through every child so hiding also clears transient
+                // selection state and cancels an in-flight notch lifecycle.
+                // Direct state mutation here used to leave those child-owned
+                // details alive until the shelf was shown again.
+                return .concatenate(
+                    state.shelves.ids.map { id in
+                        .send(
+                            .shelves(
+                                .element(id: id, action: .hideRequested)
+                            )
+                        )
+                    }
+                )
             }
         }
         .forEach(\.shelves, action: \.shelves) {

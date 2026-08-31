@@ -12,40 +12,46 @@ struct ShelfPanelContentView: View {
 
     @ViewBuilder
     var body: some View {
-        if let notchDock = store.notchDock,
-           notchDock.presentation == .stowed || notchDock.presentation == .peeking {
-            ShelfNotchHandleView(store: store, notchDock: notchDock)
-        } else {
-            VStack(spacing: ShelfShareMetrics.gap) {
-                ShelfView(store: store)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: shelfSize.height)
-                    .overlay(alignment: .top) {
-                        if let notchDock = store.notchDock,
-                           notchDock.presentation == .attached
-                               || notchDock.presentation == .retracting {
-                            ShelfNotchMergeBridge(
-                                notchWidth: ShelfNotchMetrics.mergeNeckWidth(
-                                    for: notchDock.target.notchFrame.width
-                                ),
-                                shelfWidth: shelfSize.width
-                            )
+        // A concrete render container is required here. `Group` is layout
+        // transparent, so a GeometryEffect attached to it never reached the
+        // hosted border and controls even though the AppKit material mask was
+        // deforming underneath them.
+        ZStack(alignment: .top) {
+            if let notchDock = store.notchDock,
+               notchDock.presentation == .stowed || notchDock.presentation == .peeking {
+                ShelfNotchHandleView(store: store, notchDock: notchDock)
+            } else {
+                VStack(spacing: ShelfShareMetrics.gap) {
+                        ShelfView(store: store)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: shelfSize.height)
+                        .overlay(alignment: .top) {
+                            if let notchDock = store.notchDock,
+                               notchDock.presentation == .retracting {
+                                ShelfNotchMergeBridge(
+                                    notchWidth: ShelfNotchMetrics.mergeNeckWidth(
+                                        for: notchDock.target.notchFrame.width
+                                    ),
+                                    shelfWidth: shelfSize.width
+                                )
+                            }
                         }
-                    }
 
-                if store.dockedEdge == nil {
-                    ShelfShareDock(store: store)
-                        .frame(
-                            width: ShelfShareMetrics.dockSize.width,
-                            height: ShelfShareMetrics.dockSize.height
-                        )
-                } else {
-                    Color.clear
-                        .frame(height: ShelfShareMetrics.dockSize.height)
+                    if store.dockedEdge == nil {
+                        ShelfShareDock(store: store)
+                            .frame(
+                                width: ShelfShareMetrics.dockSize.width,
+                                height: ShelfShareMetrics.dockSize.height
+                            )
+                    } else {
+                        Color.clear
+                            .frame(height: ShelfShareMetrics.dockSize.height)
+                    }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
     private var shelfSize: CGSize {
@@ -596,14 +602,6 @@ private struct ShareSplitBridge: View, Animatable {
 }
 
 private extension ShelfShareMethod {
-    var title: String {
-        switch self {
-        case .airDrop: "AirDrop"
-        case .email: "Email"
-        case .kakaoTalk: "KakaoTalk"
-        }
-    }
-
     var shortTitle: String {
         switch self {
         case .airDrop: "AirDrop"
@@ -638,7 +636,7 @@ private extension ShelfShareMethod {
 }
 
 @MainActor
-private enum ShelfShareIcons {
+enum ShelfShareIcons {
     static let airDrop: NSImage? = {
         let path = "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/SidebarAirDrop.icns"
         guard let image = NSImage(contentsOfFile: path) else { return nil }

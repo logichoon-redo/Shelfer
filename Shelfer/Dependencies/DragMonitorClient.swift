@@ -7,8 +7,8 @@ import ComposableArchitecture
 import Foundation
 
 enum DragEvent: Equatable, Sendable {
-    case activityChanged(Bool)
-    case shelfRequested(CGPoint)
+    case activityChanged(Bool, prefersPathOnlyDrop: Bool)
+    case shelfRequested(CGPoint, prefersPathOnlyDrop: Bool)
     case dragEnded
 }
 
@@ -26,10 +26,22 @@ extension DragMonitorClient: DependencyKey {
             AsyncStream { continuation in
                 let setup = Task { @MainActor () -> DragMonitor in
                     let monitor = DragMonitor()
-                    monitor.onDragActivityChanged = {
-                        continuation.yield(.activityChanged($0))
+                    monitor.onDragActivityChanged = { isActive, prefersPathOnlyDrop in
+                        continuation.yield(
+                            .activityChanged(
+                                isActive,
+                                prefersPathOnlyDrop: prefersPathOnlyDrop
+                            )
+                        )
                     }
-                    monitor.onShelfRequested = { continuation.yield(.shelfRequested($0)) }
+                    monitor.onShelfRequested = { point, prefersPathOnlyDrop in
+                        continuation.yield(
+                            .shelfRequested(
+                                point,
+                                prefersPathOnlyDrop: prefersPathOnlyDrop
+                            )
+                        )
+                    }
                     monitor.onDragEnded = { continuation.yield(.dragEnded) }
                     monitor.start()
                     return monitor

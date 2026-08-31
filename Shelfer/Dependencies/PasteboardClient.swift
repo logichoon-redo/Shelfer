@@ -9,6 +9,7 @@ import ComposableArchitecture
 struct PasteboardClient {
     var copyText: @Sendable (String) async -> Void
     var copyImage: @Sendable (URL) async -> Bool
+    var copyContents: @Sendable ([ShelfItem.Content]) async -> Bool
 }
 
 extension PasteboardClient: DependencyKey {
@@ -24,16 +25,41 @@ extension PasteboardClient: DependencyKey {
             await MainActor.run {
                 PasteboardClient.writeImage(at: url, to: .general)
             }
+        },
+        copyContents: { contents in
+            await MainActor.run {
+                PasteboardClient.writeContents(contents, to: .general)
+            }
         }
     )
 
     static let testValue = PasteboardClient(
         copyText: { _ in },
-        copyImage: { _ in false }
+        copyImage: { _ in false },
+        copyContents: { _ in false }
     )
 }
 
 extension PasteboardClient {
+    @MainActor
+    static func writeContents(
+        _ contents: [ShelfItem.Content],
+        to pasteboard: NSPasteboard
+    ) -> Bool {
+        guard !contents.isEmpty else { return false }
+
+        let writers: [NSPasteboardWriting] = contents.map { content in
+            switch content {
+            case let .file(url): url as NSURL
+            case let .path(path): path as NSString
+            case let .text(text): text as NSString
+            }
+        }
+
+        pasteboard.clearContents()
+        return pasteboard.writeObjects(writers)
+    }
+
     @MainActor
     static func writeImage(at url: URL, to pasteboard: NSPasteboard) -> Bool {
         let accessedSecurityScope = url.startAccessingSecurityScopedResource()

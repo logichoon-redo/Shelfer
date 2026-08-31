@@ -23,6 +23,12 @@ struct ShelferApp: App {
 
             Divider()
 
+            Button("Getting Started…") {
+                appDelegate.showFinderSyncOnboarding()
+            }
+
+            Divider()
+
             Button("Quit") {
                 NSApp.terminate(nil)
             }

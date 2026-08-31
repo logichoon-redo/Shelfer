@@ -13,6 +13,8 @@ enum ShelfMetrics {
     static let cornerRadius: CGFloat = 28
     static let outerInset: CGFloat = 12
     static let buttonDiameter: CGFloat = 34
+    static let buttonHitDiameter: CGFloat = 44
+    static let buttonOuterInset = outerInset - (buttonHitDiameter - buttonDiameter) / 2
     static let handleSize = CGSize(width: 36, height: 4)
     static let iconSize: CGFloat = 84
     static let labelTextMaxWidth: CGFloat = 72
@@ -38,6 +40,8 @@ enum ShelfNotchMetrics {
     static let verticalCaptureDistance: CGFloat = 72
     static let dropTargetHorizontalInset: CGFloat = 24
     static let dropTargetDepth: CGFloat = 18
+    static let dropHighlightLeftExtension: CGFloat = 2
+    static let dropHighlightBottomCornerRadius: CGFloat = 13
     /// Pushes the neck behind the camera housing far enough to fill the display
     /// pixels exposed by the notch's rounded lower corners.
     static let notchCornerCoverDepth: CGFloat = 14
@@ -49,9 +53,20 @@ enum ShelfNotchMetrics {
     /// housing. Its top matches the notch exactly, then widens and fades into
     /// the shelf so neither the border nor the material seam remains visible.
     static let mergeGradientDepth: CGFloat = 52
+    static let suctionTwistAmplitude: CGFloat = 24
+    static let suctionTailWidth: CGFloat = 42
+    static let suctionTailHeight: CGFloat = 20
+    /// The material collapses before the panel moves. It only needs to travel
+    /// far enough to carry the final narrow tail behind the camera housing.
+    static var suctionRetractionTravelDistance: CGFloat {
+        max(0, mergeGradientDepth + suctionTailHeight - mergeOverlap)
+    }
     /// The transparent window leaves enough room for the ambient halo to bloom.
     static let idleHintDepth: CGFloat = 20
     static let idleHintHorizontalInset: CGFloat = 66
+    /// Extra transparent space below the visible hint prevents the Gaussian
+    /// blur from being cut off by the panel's lower window boundary.
+    static let ambientBottomRenderOverflow: CGFloat = 64
 
     /// Extends the luminous surface past the hardware notch so its sides and
     /// lower edge remain visible while the center sits behind the camera housing.
@@ -79,12 +94,7 @@ enum ShelfNotchMetrics {
     /// Independent optical adjustment for the small gray drag handle.
     static let handleHorizontalOffset: CGFloat = -4
     static let pullDistance: CGFloat = 14
-    /// No dwell after attachment: retraction starts as soon as the merge
-    /// animation reaches the camera housing.
-    static let attachmentAnimationDuration: Duration = .seconds(
-        ShelfDockMetrics.animationDuration
-    )
-    static let retractionDuration: TimeInterval = 0.38
+    static let retractionDuration: TimeInterval = 0.72
     static let peekAnimationDuration: TimeInterval = 0.52
 }
 

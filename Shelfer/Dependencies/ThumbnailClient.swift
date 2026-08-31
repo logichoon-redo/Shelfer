@@ -35,14 +35,71 @@ extension DependencyValues {
 }
 
 private actor Cache {
-    private var images: [URL: NSImage] = [:]
+    private struct Key: Hashable {
+        let url: URL
+        let pointSize: Int
+
+        var cacheKey: NSString {
+            "\(url.absoluteString)|\(pointSize)" as NSString
+        }
+    }
+
+    private static let maximumConcurrentRequests = 4
+
+    private let images: NSCache<NSString, NSImage> = {
+        let cache = NSCache<NSString, NSImage>()
+        cache.countLimit = 256
+        cache.totalCostLimit = 128 * 1_024 * 1_024
+        return cache
+    }()
+    private var inFlight: [Key: Task<NSImage?, Never>] = [:]
+    private var activeRequestCount = 0
+    private var permitWaiters: [CheckedContinuation<Void, Never>] = []
 
     func thumbnail(for url: URL, size: CGFloat) async -> NSImage? {
-        if let cached = images[url] { return cached }
+        let key = Key(url: url.standardizedFileURL, pointSize: Int(size.rounded(.up)))
+        if let cached = images.object(forKey: key.cacheKey) { return cached }
+        if let task = inFlight[key] { return await task.value }
 
-        let image = await Self.generate(for: url, size: size)
-        if let image { images[url] = image }
+        let task = Task { [self] in
+            await generateWithPermit(for: key.url, size: size)
+        }
+        inFlight[key] = task
+        let image = await task.value
+        inFlight[key] = nil
+        if let image {
+            // A Quick Look request is generated at high scale. This estimate
+            // is intentionally conservative so scrolling through thousands of
+            // files cannot grow thumbnail memory without a bound.
+            let estimatedCost = max(1, key.pointSize * key.pointSize * 16)
+            images.setObject(image, forKey: key.cacheKey, cost: estimatedCost)
+        }
         return image
+    }
+
+    private func generateWithPermit(for url: URL, size: CGFloat) async -> NSImage? {
+        await acquirePermit()
+        defer { releasePermit() }
+        return await Self.generate(for: url, size: size)
+    }
+
+    private func acquirePermit() async {
+        if activeRequestCount < Self.maximumConcurrentRequests {
+            activeRequestCount += 1
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            permitWaiters.append(continuation)
+        }
+    }
+
+    private func releasePermit() {
+        if permitWaiters.isEmpty {
+            activeRequestCount -= 1
+        } else {
+            permitWaiters.removeFirst().resume()
+        }
     }
 
     private static func generate(for url: URL, size: CGFloat) async -> NSImage? {

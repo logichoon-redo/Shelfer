@@ -7,6 +7,20 @@ import AppKit
 import ComposableArchitecture
 import SwiftUI
 
+/// SwiftUI renders its buttons inside the hosting view itself rather than as
+/// individual `NSButton` descendants. `NSHostingView` rejects the first mouse by
+/// default, so a click arriving while another app is active only changes the
+/// panel's key state and never reaches the SwiftUI button action.
+final class ShelfHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
+        true
+    }
+
+    override var needsPanelToBecomeKey: Bool {
+        false
+    }
+}
+
 /// Mirrors `ShelfFeature.State` onto an `NSPanel`. It makes no decisions about
 /// when a shelf should appear — it only reflects what the store already decided.
 @MainActor
@@ -45,12 +59,17 @@ final class ShelfWindowController {
         guard isObserving else { return }
 
         withObservationTracking {
-            let shelfSize = store.isExpanded ? ShelfDetailMetrics.size : ShelfMetrics.size
+            let isExpanded = store.isExpanded
+            let shelfSize = isExpanded ? ShelfDetailMetrics.size : ShelfMetrics.size
             sync(
                 isPresented: store.isPresented,
                 position: store.position,
                 dockedEdge: store.dockedEdge,
                 notchDock: store.notchDock,
+                isExpanded: isExpanded,
+                isEmpty: store.isEmpty,
+                isClearing: store.isClearing,
+                showsEmptyCloseButton: store.showsEmptyCloseButton,
                 shelfSize: shelfSize,
                 panelSize: ShelfShareMetrics.panelSize(for: shelfSize)
             )
@@ -78,6 +97,10 @@ final class ShelfWindowController {
         position: CGPoint?,
         dockedEdge: ShelfDockEdge?,
         notchDock: ShelfNotchDock?,
+        isExpanded: Bool,
+        isEmpty: Bool,
+        isClearing: Bool,
+        showsEmptyCloseButton: Bool,
         shelfSize: CGSize,
         panelSize: CGSize
     ) {
@@ -102,6 +125,15 @@ final class ShelfWindowController {
 
         let panel = panel ?? makePanel()
         self.panel = panel
+        syncTopControls(
+            in: panel,
+            dockedEdge: dockedEdge,
+            notchDock: notchDock,
+            isExpanded: isExpanded,
+            isEmpty: isEmpty,
+            isClearing: isClearing,
+            showsEmptyCloseButton: showsEmptyCloseButton
+        )
 
         let hasFreshPosition = position.map { $0 != appliedPosition } ?? false
         if let position, hasFreshPosition, dockedEdge == nil, notchDock == nil {
@@ -171,24 +203,42 @@ final class ShelfWindowController {
         panel.ignoresMouseEvents = notchDock.presentation == .stowed
         syncNotchHoverWatch(for: notchDock, in: panel)
         setShelfBackgroundVisible(
-            notchDock.presentation == .attached || notchDock.presentation == .retracting,
+            notchDock.presentation == .retracting,
             in: panel
         )
         setShelfBackgroundNotchWidth(
-            notchDock.presentation == .attached || notchDock.presentation == .retracting
+            notchDock.presentation == .retracting
                 ? ShelfNotchMetrics.mergeNeckWidth(
                     for: notchDock.target.notchFrame.width
                 )
                 : nil,
             in: panel
         )
+        if previousPresentation != notchDock.presentation {
+            let shouldAnimate = panel.isVisible
+                && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            switch notchDock.presentation {
+            case .retracting:
+                animateShelfBackgroundSuction(
+                    to: 1,
+                    duration: ShelfNotchMetrics.retractionDuration,
+                    animated: shouldAnimate,
+                    in: panel
+                )
+            case .stowed, .peeking:
+                animateShelfBackgroundSuction(
+                    to: 0,
+                    duration: 0,
+                    animated: false,
+                    in: panel
+                )
+            }
+        }
 
         let targetFrame = notchFrame(for: notchDock, fullPanelSize: fullPanelSize)
         guard panel.frame != targetFrame else { return }
 
         switch notchDock.presentation {
-        case .attached:
-            animate(panel, to: targetFrame, duration: ShelfDockMetrics.animationDuration)
         case .retracting:
             animate(panel, to: targetFrame, duration: ShelfNotchMetrics.retractionDuration)
         case .stowed:
@@ -304,7 +354,7 @@ final class ShelfWindowController {
                         self.store.send(.notchHoverChanged(false))
                     }
 
-                case .attached, .retracting:
+                case .retracting:
                     return
                 }
 
@@ -357,22 +407,19 @@ final class ShelfWindowController {
         let target = notchDock.target
 
         switch notchDock.presentation {
-        case .attached:
-            return CGRect(
-                x: target.notchFrame.midX
-                    - fullPanelSize.width / 2
-                    + ShelfNotchMetrics.viewHorizontalOffset,
-                y: target.notchFrame.minY + ShelfNotchMetrics.mergeOverlap - fullPanelSize.height,
-                width: fullPanelSize.width,
-                height: fullPanelSize.height
-            )
-
         case .retracting:
             return CGRect(
                 x: target.notchFrame.midX
                     - fullPanelSize.width / 2
                     + ShelfNotchMetrics.viewHorizontalOffset,
-                y: target.notchFrame.minY,
+                // By this phase the shelf is collapsing into a short tail.
+                // Moving the complete panel height hid that deformation before
+                // it could be perceived; move only the remaining tail behind
+                // the camera housing instead.
+                y: target.notchFrame.minY
+                    + ShelfNotchMetrics.mergeOverlap
+                    - fullPanelSize.height
+                    + ShelfNotchMetrics.suctionRetractionTravelDistance,
                 width: fullPanelSize.width,
                 height: fullPanelSize.height
             )
@@ -401,6 +448,19 @@ final class ShelfWindowController {
 
     private func setShelfBackgroundNotchWidth(_ width: CGFloat?, in panel: ShelfPanel) {
         (panel.contentView as? ShelfPanelRootView)?.notchMergeWidth = width
+    }
+
+    private func animateShelfBackgroundSuction(
+        to progress: CGFloat,
+        duration: TimeInterval,
+        animated: Bool,
+        in panel: ShelfPanel
+    ) {
+        (panel.contentView as? ShelfPanelRootView)?.animateNotchSuction(
+            to: progress,
+            duration: duration,
+            animated: animated
+        )
     }
 
     private func syncDocking(
@@ -491,13 +551,14 @@ final class ShelfWindowController {
         let panelSize = ShelfShareMetrics.panelSize(for: ShelfMetrics.size)
         let panel = ShelfPanel(contentRect: NSRect(origin: .zero, size: panelSize))
         let root = ShelfPanelRootView(frame: NSRect(origin: .zero, size: panelSize))
-        let hosting = NSHostingView(rootView: ShelfPanelContentView(store: store))
+        let hosting = ShelfHostingView(rootView: ShelfPanelContentView(store: store))
         // This controller is the sole owner of panel geometry. Allowing the
         // hosting view to propagate a transition's intrinsic size back to its
         // window can shift the panel while the notch handle is disappearing.
         hosting.sizingOptions = []
         hosting.translatesAutoresizingMaskIntoConstraints = false
         root.addSubview(hosting)
+        root.suctionContentView = hosting
         NSLayoutConstraint.activate([
             hosting.leadingAnchor.constraint(equalTo: root.leadingAnchor),
             hosting.trailingAnchor.constraint(equalTo: root.trailingAnchor),
@@ -514,14 +575,57 @@ final class ShelfWindowController {
         panel.onUserDragEnded = { [weak self] point in
             self?.userDragEnded(at: point)
         }
+        panel.onTopControl = { [weak self] control in
+            guard let self else { return }
+            switch control {
+            case .close:
+                store.send(.closeButtonTapped)
+            case .clear:
+                store.send(.clearButtonTapped)
+            case .back:
+                store.send(.backButtonTapped)
+            case .grid:
+                store.send(.layoutChanged(.grid))
+            case .list:
+                store.send(.layoutChanged(.list))
+            }
+        }
         return panel
+    }
+
+    private func syncTopControls(
+        in panel: ShelfPanel,
+        dockedEdge: ShelfDockEdge?,
+        notchDock: ShelfNotchDock?,
+        isExpanded: Bool,
+        isEmpty: Bool,
+        isClearing: Bool,
+        showsEmptyCloseButton: Bool
+    ) {
+        guard dockedEdge == nil, notchDock == nil else {
+            panel.enabledTopControls = []
+            return
+        }
+
+        if isExpanded {
+            panel.enabledTopControls = [.back, .grid, .list]
+        } else {
+            var controls: Set<ShelfPanelTopControl> = []
+            if !isEmpty || showsEmptyCloseButton {
+                controls.insert(.close)
+            }
+            if !isEmpty, !isClearing {
+                controls.insert(.clear)
+            }
+            panel.enabledTopControls = controls
+        }
     }
 
     private func userDragBegan() {
         guard let notchDock = store.notchDock else { return }
 
         switch notchDock.presentation {
-        case .attached, .retracting:
+        case .retracting:
             didUndockNotchDuringCurrentDrag = true
             pendingNotchRestorePoint = NSEvent.mouseLocation
             store.send(.notchUndockRequested)
@@ -573,7 +677,10 @@ final class ShelfWindowController {
             width: panel.frame.width,
             height: max(0, panel.frame.height - ShelfShareMetrics.footerHeight)
         )
-        guard let target = ShelfNotchGeometry.target(accepting: materialFrame) else { return }
+        guard let target = ShelfNotchGeometry.target(
+            accepting: materialFrame,
+            allowsSideContact: store.isExpanded
+        ) else { return }
 
         undockedFrame = panel.frame
         dockedScreen = screen(containing: target.notchFrame)
