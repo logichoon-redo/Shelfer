@@ -63,6 +63,155 @@ struct ShelfSurfaceTests {
         #expect(panel.becomesKeyOnlyIfNeeded)
     }
 
+    @Test func itemInteractionCanMakeThePanelKeyForEditingShortcuts() {
+        let source = ShelfDragSource.DragSourceView()
+
+        #expect(source.acceptsFirstResponder)
+        #expect(source.needsPanelToBecomeKey)
+    }
+
+    @Test func detailBackgroundCanMakeThePanelKeyForEditingShortcuts() {
+        let background = WindowDragTarget.TargetView()
+
+        #expect(background.acceptsFirstResponder)
+        #expect(background.needsPanelToBecomeKey)
+    }
+
+    @Test func shelfPanelRoutesEditingKeyboardCommands() throws {
+        let panel = ShelfPanel(contentRect: CGRect(x: 0, y: 0, width: 200, height: 120))
+        var received: [ShelfPanelKeyboardCommand] = []
+        panel.onKeyboardCommand = { received.append($0) }
+
+        panel.sendEvent(
+            try #require(keyEvent(characters: "\u{F702}", keyCode: 123))
+        )
+        panel.sendEvent(
+            try #require(keyEvent(characters: "\u{F703}", keyCode: 124))
+        )
+        panel.sendEvent(
+            try #require(keyEvent(characters: "\u{F700}", keyCode: 126))
+        )
+        panel.sendEvent(
+            try #require(keyEvent(characters: "\u{F701}", keyCode: 125))
+        )
+        panel.sendEvent(
+            try #require(keyEvent(characters: "\u{7F}", keyCode: 51))
+        )
+        panel.sendEvent(
+            try #require(keyEvent(characters: "c", modifiers: .command, keyCode: 8))
+        )
+        panel.sendEvent(
+            try #require(keyEvent(characters: "v", modifiers: .command, keyCode: 9))
+        )
+        panel.sendEvent(
+            try #require(keyEvent(characters: "z", modifiers: .command, keyCode: 6))
+        )
+
+        #expect(
+            received == [
+                .moveSelection(.previous),
+                .moveSelection(.next),
+                .moveSelection(.previous),
+                .moveSelection(.next),
+                .deleteSelection,
+                .copySelection,
+                .paste,
+                .undo,
+            ]
+        )
+    }
+
+    @Test func persistentShelfRootRoutesCommandKeyEquivalents() throws {
+        let root = ShelfPanelRootView(frame: CGRect(x: 0, y: 0, width: 200, height: 120))
+        var received: [ShelfPanelKeyboardCommand] = []
+        root.onKeyboardCommand = { received.append($0) }
+
+        #expect(
+            root.performKeyEquivalent(
+                with: try #require(
+                    keyEvent(characters: "c", modifiers: .command, keyCode: 8)
+                )
+            )
+        )
+        #expect(
+            root.performKeyEquivalent(
+                with: try #require(
+                    keyEvent(characters: "v", modifiers: .command, keyCode: 9)
+                )
+            )
+        )
+        #expect(
+            root.performKeyEquivalent(
+                with: try #require(
+                    keyEvent(characters: "z", modifiers: .command, keyCode: 6)
+                )
+            )
+        )
+
+        #expect(received == [.copySelection, .paste, .undo])
+    }
+
+    @Test func editingShortcutsDoNotDependOnTheActiveInputLanguage() throws {
+        #expect(
+            ShelfPanelKeyboardCommand(
+                event: try #require(
+                    keyEvent(characters: "ㅊ", modifiers: .command, keyCode: 8)
+                )
+            ) == .copySelection
+        )
+        #expect(
+            ShelfPanelKeyboardCommand(
+                event: try #require(
+                    keyEvent(characters: "ㅍ", modifiers: .command, keyCode: 9)
+                )
+            ) == .paste
+        )
+        #expect(
+            ShelfPanelKeyboardCommand(
+                event: try #require(
+                    keyEvent(characters: "ㅋ", modifiers: .command, keyCode: 6)
+                )
+            ) == .undo
+        )
+    }
+
+    @Test func reorderPlacementTracksBothGridAndListEdges() {
+        let bounds = CGRect(x: 0, y: 0, width: 100, height: 80)
+
+        #expect(
+            ShelfDragSource.DragSourceView.reorderPlacement(
+                at: CGPoint(x: 20, y: 40),
+                in: bounds,
+                axis: .horizontal,
+                isFlipped: false
+            ) == .before
+        )
+        #expect(
+            ShelfDragSource.DragSourceView.reorderPlacement(
+                at: CGPoint(x: 80, y: 40),
+                in: bounds,
+                axis: .horizontal,
+                isFlipped: false
+            ) == .after
+        )
+        #expect(
+            ShelfDragSource.DragSourceView.reorderPlacement(
+                at: CGPoint(x: 50, y: 70),
+                in: bounds,
+                axis: .vertical,
+                isFlipped: false
+            ) == .before
+        )
+        #expect(
+            ShelfDragSource.DragSourceView.reorderPlacement(
+                at: CGPoint(x: 50, y: 10),
+                in: bounds,
+                axis: .vertical,
+                isFlipped: false
+            ) == .after
+        )
+    }
+
     @Test func shelfPanelRoutesTheOuterEdgesOfCompactControls() throws {
         let panelSize = ShelfShareMetrics.panelSize(for: ShelfMetrics.size)
         let panel = ShelfPanel(
@@ -456,6 +605,25 @@ struct ShelfSurfaceTests {
             eventNumber: 0,
             clickCount: 1,
             pressure: 0
+        )
+    }
+
+    private func keyEvent(
+        characters: String,
+        modifiers: NSEvent.ModifierFlags = [],
+        keyCode: UInt16
+    ) -> NSEvent? {
+        NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: modifiers,
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            characters: characters,
+            charactersIgnoringModifiers: characters,
+            isARepeat: false,
+            keyCode: keyCode
         )
     }
 }

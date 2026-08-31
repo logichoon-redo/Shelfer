@@ -13,6 +13,64 @@ enum ShelfPanelTopControl: Hashable {
     case list
 }
 
+enum ShelfPanelKeyboardCommand: Equatable {
+    case moveSelection(ShelfSelectionNavigationDirection)
+    case deleteSelection
+    case copySelection
+    case paste
+    case undo
+
+    init?(event: NSEvent) {
+        guard event.type == .keyDown else { return nil }
+
+        let modifiers = event.modifierFlags.intersection(
+            .deviceIndependentFlagsMask
+        )
+        let editingModifiers = modifiers.intersection([
+            .command,
+            .control,
+            .option,
+            .shift,
+        ])
+
+        if editingModifiers.isEmpty {
+            switch event.keyCode {
+            case 51, 117:
+                self = .deleteSelection
+                return
+            case 123, 126:
+                self = .moveSelection(.previous)
+                return
+            case 124, 125:
+                self = .moveSelection(.next)
+                return
+            default:
+                break
+            }
+        }
+
+        guard editingModifiers == .command else { return nil }
+
+        // Use the physical ANSI key positions first. Character lookup changes
+        // with the active input source (notably while typing Korean), whereas
+        // macOS editing shortcuts are expected to remain ⌘C/⌘V/⌘Z.
+        switch event.keyCode {
+        case 8: self = .copySelection
+        case 9: self = .paste
+        case 6: self = .undo
+        default:
+            guard let characters = event.charactersIgnoringModifiers?.lowercased()
+            else { return nil }
+            switch characters {
+            case "c": self = .copySelection
+            case "v": self = .paste
+            case "z": self = .undo
+            default: return nil
+            }
+        }
+    }
+}
+
 /// Borderless floating panel that hosts the shelf without stealing focus from the
 /// app the user is dragging from.
 final class ShelfPanel: NSPanel {
@@ -21,9 +79,11 @@ final class ShelfPanel: NSPanel {
     var onUserDragMoved: () -> Void = {}
     var onUserDragEnded: (CGPoint) -> Void = { _ in }
     var onTopControl: (ShelfPanelTopControl) -> Void = { _ in }
+    var onKeyboardCommand: (ShelfPanelKeyboardCommand) -> Void = { _ in }
     var enabledTopControls: Set<ShelfPanelTopControl> = []
 
     private var userDragTask: Task<Void, Never>?
+    private var keyboardMonitor: Any?
     private var isPerformingUserDrag = false
     private var pressedTopControl: ShelfPanelTopControl?
     private static let leftButtonMask = 1 << 0
@@ -58,6 +118,28 @@ final class ShelfPanel: NSPanel {
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
         acceptsMouseMovedEvents = true
+
+        // AppKit may resolve menu shortcuts before they enter this panel's
+        // sendEvent/performKeyEquivalent paths. A local monitor is the earliest
+        // in-process hook and only consumes commands while this exact shelf is
+        // the key window.
+        keyboardMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+            [weak self] event in
+            guard let self,
+                  isKeyWindow,
+                  let command = ShelfPanelKeyboardCommand(event: event) else {
+                return event
+            }
+
+            onKeyboardCommand(command)
+            return nil
+        }
+    }
+
+    deinit {
+        if let keyboardMonitor {
+            NSEvent.removeMonitor(keyboardMonitor)
+        }
     }
 
     override var canBecomeKey: Bool { true }
@@ -72,6 +154,11 @@ final class ShelfPanel: NSPanel {
     /// 44pt circles deterministic even while an empty mid-drag shelf is being
     /// replaced by its filled state and its platform subviews are reordered.
     override func sendEvent(_ event: NSEvent) {
+        if let command = ShelfPanelKeyboardCommand(event: event) {
+            onKeyboardCommand(command)
+            return
+        }
+
         switch event.type {
         case .leftMouseDown:
             guard event.clickCount == 1,
@@ -99,6 +186,19 @@ final class ShelfPanel: NSPanel {
         default:
             super.sendEvent(event)
         }
+    }
+
+    /// Command-key events can be offered to the menu/responder chain before
+    /// AppKit sends them through the window's ordinary event path. Handling
+    /// key equivalents here keeps ⌘C, ⌘V, and ⌘Z available even though Shelfer
+    /// is hosted by a nonactivating utility panel with no conventional menu.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard let command = ShelfPanelKeyboardCommand(event: event) else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        onKeyboardCommand(command)
+        return true
     }
 
     private func topControl(at windowPoint: CGPoint) -> ShelfPanelTopControl? {
@@ -303,6 +403,7 @@ final class ShelfBackgroundView: NSVisualEffectView {
 /// truly transparent space below it. Only `shelfBackground` receives material.
 final class ShelfPanelRootView: NSView {
     let shelfBackground = ShelfBackgroundView(frame: .zero)
+    var onKeyboardCommand: (ShelfPanelKeyboardCommand) -> Void = { _ in }
     weak var suctionContentView: NSView? {
         didSet {
             suctionContentView?.wantsLayer = true
@@ -310,6 +411,34 @@ final class ShelfPanelRootView: NSView {
     }
 
     private var genieOverlayLayer: CALayer?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override var needsPanelToBecomeKey: Bool { true }
+
+    @objc(copy:)
+    private func performCopyAction(_ sender: Any?) {
+        onKeyboardCommand(.copySelection)
+    }
+
+    @objc(paste:)
+    private func performPasteAction(_ sender: Any?) {
+        onKeyboardCommand(.paste)
+    }
+
+    @objc(undo:)
+    private func performUndoAction(_ sender: Any?) {
+        onKeyboardCommand(.undo)
+    }
+
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard let command = ShelfPanelKeyboardCommand(event: event) else {
+            return super.performKeyEquivalent(with: event)
+        }
+
+        onKeyboardCommand(command)
+        return true
+    }
 
     var showsShelfBackground = true {
         didSet {
@@ -563,5 +692,28 @@ final class ShelfPanelRootView: NSView {
             blue: 0.95,
             alpha: 1
         )
+    }
+}
+
+extension NSView {
+    /// Makes the stable shelf root the editor responder. Item views can be
+    /// removed by Delete/Paste, while this root remains alive for the whole
+    /// window session and therefore keeps subsequent shortcuts available.
+    func claimShelfKeyboardFocus() {
+        guard let window else { return }
+
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+
+        var candidate: NSView? = self
+        while let view = candidate {
+            if let root = view as? ShelfPanelRootView {
+                window.makeFirstResponder(root)
+                return
+            }
+            candidate = view.superview
+        }
+
+        window.makeFirstResponder(self)
     }
 }

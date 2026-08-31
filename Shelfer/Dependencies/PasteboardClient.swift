@@ -10,6 +10,19 @@ struct PasteboardClient {
     var copyText: @Sendable (String) async -> Void
     var copyImage: @Sendable (URL) async -> Bool
     var copyContents: @Sendable ([ShelfItem.Content]) async -> Bool
+    var readContents: @Sendable () async -> [ShelfItem.Content]
+
+    init(
+        copyText: @escaping @Sendable (String) async -> Void,
+        copyImage: @escaping @Sendable (URL) async -> Bool,
+        copyContents: @escaping @Sendable ([ShelfItem.Content]) async -> Bool,
+        readContents: @escaping @Sendable () async -> [ShelfItem.Content] = { [] }
+    ) {
+        self.copyText = copyText
+        self.copyImage = copyImage
+        self.copyContents = copyContents
+        self.readContents = readContents
+    }
 }
 
 extension PasteboardClient: DependencyKey {
@@ -30,13 +43,19 @@ extension PasteboardClient: DependencyKey {
             await MainActor.run {
                 PasteboardClient.writeContents(contents, to: .general)
             }
+        },
+        readContents: {
+            await MainActor.run {
+                ShelfSurface.SurfaceView.contents(from: .general)
+            }
         }
     )
 
     static let testValue = PasteboardClient(
         copyText: { _ in },
         copyImage: { _ in false },
-        copyContents: { _ in false }
+        copyContents: { _ in false },
+        readContents: { [] }
     )
 }
 

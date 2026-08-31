@@ -590,6 +590,24 @@ final class ShelfWindowController {
                 store.send(.layoutChanged(.list))
             }
         }
+        let keyboardCommandHandler: (ShelfPanelKeyboardCommand) -> Void = {
+            [weak self] command in
+            guard let self else { return }
+            switch command {
+            case let .moveSelection(direction):
+                store.send(.selectionMoveRequested(direction))
+            case .deleteSelection:
+                store.send(.deleteSelectionRequested)
+            case .copySelection:
+                store.send(.copySelectionRequested)
+            case .paste:
+                store.send(.pasteRequested)
+            case .undo:
+                store.send(.undoRequested)
+            }
+        }
+        panel.onKeyboardCommand = keyboardCommandHandler
+        root.onKeyboardCommand = keyboardCommandHandler
         return panel
     }
 

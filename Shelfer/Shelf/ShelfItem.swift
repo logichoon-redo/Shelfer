@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 struct ShelfItem: Identifiable, Equatable {
     /// Text is kept in memory rather than written out as an .rtf file, so it can
     /// be handed straight back to a text field on the way out.
-    enum Content: Hashable, Sendable {
+    nonisolated enum Content: Hashable, Sendable {
         case file(URL)
         /// An absolute filesystem path kept as inert text. Unlike `.file`, this
         /// never grants access to, previews, or exports the file it points at.

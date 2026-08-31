@@ -34,5 +34,28 @@ struct ShelferApp: App {
             }
             .keyboardShortcut("q")
         }
+        .commands {
+            // MenuBarExtra does not install the standard Edit commands. Keep
+            // native key equivalents in the application menu and forward them
+            // through AppKit's responder chain to the focused shelf.
+            CommandMenu("Edit") {
+                Button("Undo") {
+                    NSApp.sendAction(Selector(("undo:")), to: nil, from: nil)
+                }
+                .keyboardShortcut("z")
+
+                Divider()
+
+                Button("Copy") {
+                    NSApp.sendAction(#selector(NSText.copy(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("c")
+
+                Button("Paste") {
+                    NSApp.sendAction(#selector(NSText.paste(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut("v")
+            }
+        }
     }
 }

@@ -16,8 +16,25 @@ enum ShelfCopyFeedbackTarget: Equatable, Sendable {
     case stack
 }
 
+enum ShelfReorderPlacement: Equatable, Sendable {
+    case before
+    case after
+}
+
+enum ShelfSelectionNavigationDirection: Equatable, Sendable {
+    case previous
+    case next
+}
+
 @Reducer
 struct ShelfFeature {
+    struct EditSnapshot: Equatable {
+        var items: IdentifiedArrayOf<ShelfItem>
+        var selectedItemIDs: Set<ShelfItem.ID>
+        var isExpanded: Bool
+        var showsEmptyCloseButton: Bool
+    }
+
     @ObservableState
     struct State: Equatable, Identifiable {
         var id = UUID()
@@ -60,6 +77,11 @@ struct ShelfFeature {
 
         /// Clicking items toggles membership without requiring a modifier.
         var selectedItemIDs: Set<ShelfItem.ID> = []
+
+        /// Content edits use a small local history so ⌘Z can restore deletes,
+        /// paste replacements, and drag reordering without involving the app
+        /// that happened to be active before this nonactivating panel.
+        var undoHistory: [EditSnapshot] = []
 
         /// Keeps the items alive while their clear-away animation is running.
         var isClearing = false
@@ -118,6 +140,20 @@ struct ShelfFeature {
         case layoutChanged(ShelfLayout)
         case itemSelectionToggled(ShelfItem.ID)
         case itemContextMenuRequested(ShelfItem.ID)
+        case selectionMoveRequested(ShelfSelectionNavigationDirection)
+        case deleteSelectionRequested
+        case copySelectionRequested
+        case pasteRequested
+        case pasteContentsLoaded(
+            [ShelfItem.Content],
+            replacing: Set<ShelfItem.ID>
+        )
+        case itemsReorderRequested(
+            [ShelfItem.ID],
+            relativeTo: ShelfItem.ID,
+            placement: ShelfReorderPlacement
+        )
+        case undoRequested
         case revealInFinderTapped
         case revealItemsInFinderRequested([ShelfItem.Content])
         case shareItemsDropped(ShelfShareMethod, [ShelfItem.Content])
@@ -150,6 +186,7 @@ struct ShelfFeature {
         case clearAnimation
         case copyFeedback
         case notchLifecycle
+        case paste
     }
 
     var body: some Reducer<State, Action> {
@@ -266,7 +303,8 @@ struct ShelfFeature {
                 state.notchDock = nil
                 return .merge(
                     .cancel(id: CancelID.clearAnimation),
-                    .cancel(id: CancelID.notchLifecycle)
+                    .cancel(id: CancelID.notchLifecycle),
+                    .cancel(id: CancelID.paste)
                 )
 
             case .clearButtonTapped:
@@ -324,6 +362,155 @@ struct ShelfFeature {
                     state.selectedItemIDs = [id]
                 }
                 return .none
+
+            case let .selectionMoveRequested(direction):
+                guard state.isExpanded, !state.items.isEmpty else { return .none }
+
+                let selectedIndices = state.items.indices.filter {
+                    state.selectedItemIDs.contains(state.items[$0].id)
+                }
+                let targetIndex: Int
+                switch direction {
+                case .previous:
+                    targetIndex = selectedIndices.min().map {
+                        max(state.items.startIndex, $0 - 1)
+                    } ?? state.items.index(before: state.items.endIndex)
+                case .next:
+                    targetIndex = selectedIndices.max().map {
+                        min(state.items.index(before: state.items.endIndex), $0 + 1)
+                    } ?? state.items.startIndex
+                }
+
+                state.selectedItemIDs = [state.items[targetIndex].id]
+                return .none
+
+            case .deleteSelectionRequested:
+                guard state.isExpanded else { return .none }
+                return clearItems(
+                    state.selectedItemIDs,
+                    recordingUndo: true,
+                    in: &state
+                )
+
+            case .copySelectionRequested:
+                guard state.isExpanded else { return .none }
+                let selectedItems = state.items.filter {
+                    state.selectedItemIDs.contains($0.id)
+                }
+                guard let feedbackItem = selectedItems.first else { return .none }
+                return .send(
+                    .itemsCopyRequested(
+                        selectedItems.map(\.content),
+                        .item(feedbackItem.id)
+                    )
+                )
+
+            case .pasteRequested:
+                guard state.isPresented,
+                      state.isExpanded,
+                      !state.isClearing else { return .none }
+                let replacementIDs = state.selectedItemIDs
+                return .run { send in
+                    let contents = await pasteboard.readContents()
+                    await send(
+                        .pasteContentsLoaded(
+                            contents,
+                            replacing: replacementIDs
+                        )
+                    )
+                }
+                .cancellable(id: CancelID.paste, cancelInFlight: true)
+
+            case let .pasteContentsLoaded(contents, replacementIDs):
+                guard state.isExpanded,
+                      !state.isClearing,
+                      !contents.isEmpty else { return .none }
+
+                var resultingItems = IdentifiedArrayOf<ShelfItem>()
+                resultingItems.reserveCapacity(
+                    state.items.count - state.selectedItemIDs.count + contents.count
+                )
+                for item in state.items where !replacementIDs.contains(item.id) {
+                    resultingItems.append(item)
+                }
+
+                var pastedIDs: Set<ShelfItem.ID> = []
+                for content in contents {
+                    let item = ShelfItem(content)
+                    pastedIDs.insert(item.id)
+                    if resultingItems[id: item.id] == nil {
+                        resultingItems.append(item)
+                    }
+                }
+
+                let resultingSelection = pastedIDs.intersection(
+                    Set(resultingItems.ids)
+                )
+
+                // A duplicate-only paste changes no contents, but selecting
+                // the matching shelf item gives immediate visual feedback that
+                // the payload already exists. Selection itself is not an undo
+                // step, just like an ordinary item click.
+                guard resultingItems != state.items else {
+                    state.selectedItemIDs = resultingSelection
+                    return .none
+                }
+
+                recordUndo(in: &state)
+                state.items = resultingItems
+                state.selectedItemIDs = resultingSelection
+                state.showsEmptyCloseButton = false
+                return .none
+
+            case let .itemsReorderRequested(movingIDs, targetID, placement):
+                guard state.isExpanded,
+                      !state.isClearing,
+                      !movingIDs.isEmpty,
+                      state.items[id: targetID] != nil else { return .none }
+
+                let movingIDSet = Set(movingIDs)
+                guard !movingIDSet.contains(targetID) else { return .none }
+
+                let orderedMovingItems = state.items.filter {
+                    movingIDSet.contains($0.id)
+                }
+                guard !orderedMovingItems.isEmpty else { return .none }
+
+                var remainingItems = state.items.filter {
+                    !movingIDSet.contains($0.id)
+                }
+                guard let targetIndex = remainingItems.firstIndex(where: {
+                    $0.id == targetID
+                }) else { return .none }
+
+                let insertionIndex = placement == .before
+                    ? targetIndex
+                    : targetIndex + 1
+                remainingItems.insert(contentsOf: orderedMovingItems, at: insertionIndex)
+
+                let reorderedItems = IdentifiedArray(uniqueElements: remainingItems)
+                guard reorderedItems != state.items else { return .none }
+
+                recordUndo(in: &state)
+                state.items = reorderedItems
+                state.selectedItemIDs = Set(orderedMovingItems.map(\.id))
+                return .none
+
+            case .undoRequested:
+                guard let snapshot = state.undoHistory.popLast() else { return .none }
+                state.items = snapshot.items
+                state.selectedItemIDs = snapshot.selectedItemIDs.intersection(
+                    Set(snapshot.items.ids)
+                )
+                state.isExpanded = snapshot.isExpanded && !snapshot.items.isEmpty
+                state.showsEmptyCloseButton = snapshot.showsEmptyCloseButton
+                state.isClearing = false
+                state.copyFeedbackTarget = nil
+                return .merge(
+                    .cancel(id: CancelID.clearAnimation),
+                    .cancel(id: CancelID.copyFeedback),
+                    .cancel(id: CancelID.paste)
+                )
 
             case .revealInFinderTapped:
                 let urls = state.items.compactMap(\.url)
@@ -387,31 +574,7 @@ struct ShelfFeature {
                 return .none
 
             case let .itemsClearRequested(ids):
-                guard !state.isClearing,
-                      !ids.isEmpty,
-                      ids.contains(where: { state.items[id: $0] != nil }) else { return .none }
-
-                state.items.removeAll { ids.contains($0.id) }
-                state.selectedItemIDs.subtract(ids)
-
-                let clearedCopyFeedback: Bool
-                if case let .item(feedbackID)? = state.copyFeedbackTarget {
-                    clearedCopyFeedback = ids.contains(feedbackID)
-                } else {
-                    clearedCopyFeedback = false
-                }
-                if clearedCopyFeedback {
-                    state.copyFeedbackTarget = nil
-                }
-
-                if state.isEmpty {
-                    state.isExpanded = false
-                    state.showsEmptyCloseButton = true
-                }
-
-                return clearedCopyFeedback
-                    ? .cancel(id: CancelID.copyFeedback)
-                    : .none
+                return clearItems(ids, recordingUndo: false, in: &state)
 
             case let .itemDoubleClicked(id):
                 guard let item = state.items[id: id] else { return .none }
@@ -454,6 +617,59 @@ struct ShelfFeature {
                 return .cancel(id: CancelID.notchLifecycle)
             }
         }
+    }
+
+    private func recordUndo(in state: inout State) {
+        let snapshot = EditSnapshot(
+            items: state.items,
+            selectedItemIDs: state.selectedItemIDs,
+            isExpanded: state.isExpanded,
+            showsEmptyCloseButton: state.showsEmptyCloseButton
+        )
+        state.undoHistory.append(snapshot)
+
+        let maximumUndoCount = 30
+        if state.undoHistory.count > maximumUndoCount {
+            state.undoHistory.removeFirst(
+                state.undoHistory.count - maximumUndoCount
+            )
+        }
+    }
+
+    private func clearItems(
+        _ ids: Set<ShelfItem.ID>,
+        recordingUndo: Bool,
+        in state: inout State
+    ) -> Effect<Action> {
+        guard !state.isClearing,
+              !ids.isEmpty,
+              ids.contains(where: { state.items[id: $0] != nil }) else { return .none }
+
+        if recordingUndo {
+            recordUndo(in: &state)
+        }
+
+        state.items.removeAll { ids.contains($0.id) }
+        state.selectedItemIDs.subtract(ids)
+
+        let clearedCopyFeedback: Bool
+        if case let .item(feedbackID)? = state.copyFeedbackTarget {
+            clearedCopyFeedback = ids.contains(feedbackID)
+        } else {
+            clearedCopyFeedback = false
+        }
+        if clearedCopyFeedback {
+            state.copyFeedbackTarget = nil
+        }
+
+        if state.isEmpty {
+            state.isExpanded = false
+            state.showsEmptyCloseButton = true
+        }
+
+        return clearedCopyFeedback
+            ? .cancel(id: CancelID.copyFeedback)
+            : .none
     }
 
     private func copy(

@@ -470,6 +470,49 @@ struct ShelfFeatureTests {
         }
     }
 
+    @Test func arrowKeysMoveToOneAdjacentItemAndStopAtTheEdges() async {
+        let first = ShelfItem(.text("first"))
+        let second = ShelfItem(.text("second"))
+        let third = ShelfItem(.text("third"))
+        let store = makeStore(
+            ShelfFeature.State(
+                items: [first, second, third],
+                isExpanded: true,
+                selectedItemIDs: [second.id]
+            )
+        )
+
+        await store.send(.selectionMoveRequested(.previous)) {
+            $0.selectedItemIDs = [first.id]
+        }
+        await store.send(.selectionMoveRequested(.previous))
+        await store.send(.selectionMoveRequested(.next)) {
+            $0.selectedItemIDs = [second.id]
+        }
+        await store.send(.selectionMoveRequested(.next)) {
+            $0.selectedItemIDs = [third.id]
+        }
+        await store.send(.selectionMoveRequested(.next))
+    }
+
+    @Test func arrowKeyChoosesAnEdgeWhenNothingIsSelected() async {
+        let first = ShelfItem(.text("first"))
+        let second = ShelfItem(.text("second"))
+        let previousStore = makeStore(
+            ShelfFeature.State(items: [first, second], isExpanded: true)
+        )
+        let nextStore = makeStore(
+            ShelfFeature.State(items: [first, second], isExpanded: true)
+        )
+
+        await previousStore.send(.selectionMoveRequested(.previous)) {
+            $0.selectedItemIDs = [second.id]
+        }
+        await nextStore.send(.selectionMoveRequested(.next)) {
+            $0.selectedItemIDs = [first.id]
+        }
+    }
+
     @Test func rightClickPreservesASelectionOrMovesItToTheClickedItem() async {
         let first = ShelfItem(.file(url("a.txt")))
         let second = ShelfItem(.file(url("b.txt")))
@@ -500,6 +543,191 @@ struct ShelfFeatureTests {
 
         #expect(state.itemsTargeted(by: first.id) == [first, second])
         #expect(state.itemsTargeted(by: unselected.id) == [unselected])
+    }
+
+    @Test func deleteKeyClearsTheSelectionAndUndoRestoresIt() async {
+        let first = ShelfItem(.file(url("a.txt")))
+        let second = ShelfItem(.file(url("b.txt")))
+        let originalItems: IdentifiedArrayOf<ShelfItem> = [first, second]
+        let originalSelection: Set<ShelfItem.ID> = [first.id]
+        let store = makeStore(
+            ShelfFeature.State(
+                items: originalItems,
+                isPresented: true,
+                isExpanded: true,
+                selectedItemIDs: originalSelection
+            )
+        )
+
+        await store.send(.deleteSelectionRequested) {
+            $0.items = [second]
+            $0.selectedItemIDs = []
+            $0.undoHistory = [
+                ShelfFeature.EditSnapshot(
+                    items: originalItems,
+                    selectedItemIDs: originalSelection,
+                    isExpanded: true,
+                    showsEmptyCloseButton: false
+                )
+            ]
+        }
+
+        await store.send(.undoRequested) {
+            $0.items = originalItems
+            $0.selectedItemIDs = originalSelection
+            $0.undoHistory = []
+        }
+    }
+
+    @Test func commandCopyWritesSelectedItemsInShelfOrder() async {
+        let copiedContents = LockIsolated<[[ShelfItem.Content]]>([])
+        let clock = TestClock()
+        let first = ShelfItem(.file(url("first.pdf")))
+        let second = ShelfItem(.text("second"))
+        let third = ShelfItem(.path("/tmp/third.swift"))
+        let store = TestStore(
+            initialState: ShelfFeature.State(
+                items: [first, second, third],
+                isExpanded: true,
+                selectedItemIDs: [first.id, third.id]
+            )
+        ) {
+            ShelfFeature()
+        } withDependencies: {
+            $0.pasteboard = PasteboardClient(
+                copyText: { _ in },
+                copyImage: { _ in false },
+                copyContents: { contents in
+                    copiedContents.withValue { $0.append(contents) }
+                    return true
+                }
+            )
+            $0.continuousClock = clock
+        }
+
+        let contents = [first.content, third.content]
+        await store.send(.copySelectionRequested)
+        await store.receive(.itemsCopyRequested(contents, .item(first.id)))
+        await store.receive(.itemsCopyFinished(true, .item(first.id))) {
+            $0.copyFeedbackTarget = .item(first.id)
+        }
+        #expect(copiedContents.value == [contents])
+
+        await clock.advance(by: .seconds(1))
+        await store.receive(.copyFeedbackExpired) {
+            $0.copyFeedbackTarget = nil
+        }
+    }
+
+    @Test func commandPasteReplacesTheSelectionAndUndoRestoresIt() async {
+        let first = ShelfItem(.file(url("first.pdf")))
+        let replaced = ShelfItem(.file(url("replace-me.pdf")))
+        let pasted = ShelfItem(.file(url("pasted.pdf")))
+        let originalItems: IdentifiedArrayOf<ShelfItem> = [first, replaced]
+        let originalSelection: Set<ShelfItem.ID> = [replaced.id]
+        let store = TestStore(
+            initialState: ShelfFeature.State(
+                items: originalItems,
+                isPresented: true,
+                isExpanded: true,
+                selectedItemIDs: originalSelection
+            )
+        ) {
+            ShelfFeature()
+        } withDependencies: {
+            $0.pasteboard.readContents = { [pasted.content] }
+        }
+
+        await store.send(.pasteRequested)
+        await store.receive(
+            .pasteContentsLoaded(
+                [pasted.content],
+                replacing: originalSelection
+            )
+        ) {
+            $0.items = [first, pasted]
+            $0.selectedItemIDs = [pasted.id]
+            $0.undoHistory = [
+                ShelfFeature.EditSnapshot(
+                    items: originalItems,
+                    selectedItemIDs: originalSelection,
+                    isExpanded: true,
+                    showsEmptyCloseButton: false
+                )
+            ]
+        }
+
+        await store.send(.undoRequested) {
+            $0.items = originalItems
+            $0.selectedItemIDs = originalSelection
+            $0.undoHistory = []
+        }
+    }
+
+    @Test func pastingAnExistingItemSelectsItWithoutAddingAnUndoStep() async {
+        let existing = ShelfItem(.file(url("already-there.pdf")))
+        let store = TestStore(
+            initialState: ShelfFeature.State(
+                items: [existing],
+                isPresented: true,
+                isExpanded: true
+            )
+        ) {
+            ShelfFeature()
+        } withDependencies: {
+            $0.pasteboard.readContents = { [existing.content] }
+        }
+
+        await store.send(.pasteRequested)
+        await store.receive(
+            .pasteContentsLoaded([existing.content], replacing: [])
+        ) {
+            $0.selectedItemIDs = [existing.id]
+        }
+    }
+
+    @Test func draggingSelectedItemsReordersThemAsAGroupAndCanUndo() async {
+        let first = ShelfItem(.text("first"))
+        let second = ShelfItem(.text("second"))
+        let third = ShelfItem(.text("third"))
+        let fourth = ShelfItem(.text("fourth"))
+        let originalItems: IdentifiedArrayOf<ShelfItem> = [
+            first,
+            second,
+            third,
+            fourth,
+        ]
+        let originalSelection: Set<ShelfItem.ID> = [first.id, third.id]
+        let store = makeStore(
+            ShelfFeature.State(
+                items: originalItems,
+                isExpanded: true,
+                selectedItemIDs: originalSelection
+            )
+        )
+
+        await store.send(
+            .itemsReorderRequested(
+                [first.id, third.id],
+                relativeTo: fourth.id,
+                placement: .after
+            )
+        ) {
+            $0.items = [second, fourth, first, third]
+            $0.undoHistory = [
+                ShelfFeature.EditSnapshot(
+                    items: originalItems,
+                    selectedItemIDs: originalSelection,
+                    isExpanded: true,
+                    showsEmptyCloseButton: false
+                )
+            ]
+        }
+
+        await store.send(.undoRequested) {
+            $0.items = originalItems
+            $0.undoHistory = []
+        }
     }
 
     @Test func convertingSelectedFilesToPathsPreservesTextAndSelection() async {

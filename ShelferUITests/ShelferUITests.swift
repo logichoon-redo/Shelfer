@@ -160,6 +160,98 @@ final class ShelferUITests: XCTestCase {
     }
 
     @MainActor
+    func testExpandedShelfDeleteKeyClearsSelection() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["Shelfer_DEBUG_SEED"] = [
+            "/tmp/ShelferKeyboardA.txt",
+            "/tmp/ShelferKeyboardB.txt",
+        ].joined(separator: ":")
+        app.launchEnvironment["Shelfer_DEBUG_EXPAND"] = "1"
+        app.launch()
+
+        let firstItem = app.buttons["ShelferKeyboardA.txt"]
+        let secondItem = app.buttons["ShelferKeyboardB.txt"]
+        XCTAssertTrue(firstItem.waitForExistence(timeout: 3))
+        XCTAssertTrue(secondItem.exists)
+
+        firstItem.click()
+        XCTAssertEqual(firstItem.value as? String, "Selected")
+
+        app.typeKey(XCUIKeyboardKey.delete, modifierFlags: [])
+        XCTAssertTrue(firstItem.waitForNonExistence(timeout: 2))
+        XCTAssertTrue(secondItem.exists)
+    }
+
+    @MainActor
+    func testExpandedShelfItemsCanBeReorderedByDragging() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["Shelfer_DEBUG_SEED"] = [
+            "/tmp/ShelferReorderA.txt",
+            "/tmp/ShelferReorderB.txt",
+        ].joined(separator: ":")
+        app.launchEnvironment["Shelfer_DEBUG_EXPAND"] = "1"
+        app.launch()
+
+        let firstItem = app.buttons["ShelferReorderA.txt"]
+        let secondItem = app.buttons["ShelferReorderB.txt"]
+        XCTAssertTrue(firstItem.waitForExistence(timeout: 3))
+        XCTAssertTrue(secondItem.exists)
+        XCTAssertLessThan(firstItem.frame.midX, secondItem.frame.midX)
+
+        firstItem.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)
+        ).press(
+            forDuration: 0.2,
+            thenDragTo: secondItem.coordinate(
+                withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)
+            )
+        )
+
+        let reordered = NSPredicate { _, _ in
+            secondItem.frame.midX < firstItem.frame.midX
+        }
+        expectation(for: reordered, evaluatedWith: nil)
+        waitForExpectations(timeout: 3)
+    }
+
+    @MainActor
+    func testBackgroundFocusSupportsArrowNavigation() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["Shelfer_DEBUG_SEED"] = [
+            "/System/Library/CoreServices/Finder.app",
+            "/System/Applications/Calculator.app",
+        ].joined(separator: ":")
+        app.launchEnvironment["Shelfer_DEBUG_EXPAND"] = "1"
+        app.launch()
+
+        let background = app.groups["Shelf background"]
+        let firstItem = app.buttons["Finder.app"]
+        let secondItem = app.buttons["Calculator.app"]
+        XCTAssertTrue(background.waitForExistence(timeout: 3))
+        XCTAssertTrue(firstItem.exists)
+        XCTAssertTrue(secondItem.exists)
+
+        // No item has been touched yet. A background click alone must make an
+        // arrow key reach Shelfer and choose the first item.
+        background.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)
+        ).click()
+        app.typeKey(XCUIKeyboardKey.rightArrow, modifierFlags: [])
+        expectation(
+            for: NSPredicate(format: "value == %@", "Selected"),
+            evaluatedWith: firstItem
+        )
+        waitForExpectations(timeout: 2)
+
+        app.typeKey(XCUIKeyboardKey.rightArrow, modifierFlags: [])
+        XCTAssertEqual(firstItem.value as? String, "Not selected")
+        XCTAssertEqual(secondItem.value as? String, "Selected")
+        app.typeKey(XCUIKeyboardKey.leftArrow, modifierFlags: [])
+        XCTAssertEqual(firstItem.value as? String, "Selected")
+
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {

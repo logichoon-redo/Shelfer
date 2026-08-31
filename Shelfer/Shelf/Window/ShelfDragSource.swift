@@ -14,6 +14,12 @@ import SwiftUI
 /// out as text, so dropping it on a text field inserts the string.
 struct ShelfDragSource: NSViewRepresentable {
     let contents: [ShelfItem.Content]
+    var itemIDs: [ShelfItem.ID] = []
+    var reorderScopeID: ShelfFeature.State.ID?
+    var reorderTargetID: ShelfItem.ID?
+    var reorderAxis: Axis = .horizontal
+    var itemLabel: String?
+    var isSelected = false
     /// Called with the dragged contents once they have landed somewhere.
     /// Not called when the drag is cancelled.
     var onCompleted: ([ShelfItem.Content]) -> Void = { _ in }
@@ -26,10 +32,22 @@ struct ShelfDragSource: NSViewRepresentable {
     var onShowInFinder: ([ShelfItem.Content]) -> Void = { _ in }
     var onKeepPathsOnly: (() -> Void)?
     var onClear: (() -> Void)?
+    var onReorder: ((
+        [ShelfItem.ID],
+        ShelfItem.ID,
+        ShelfReorderPlacement
+    ) -> Void)?
 
     func makeNSView(context: Context) -> DragSourceView {
         let view = DragSourceView()
+        view.registerForDraggedTypes([.fileURL, .string])
         view.contents = contents
+        view.itemIDs = itemIDs
+        view.reorderScopeID = reorderScopeID
+        view.reorderTargetID = reorderTargetID
+        view.reorderAxis = reorderAxis
+        view.itemLabel = itemLabel
+        view.isSelected = isSelected
         view.onCompleted = onCompleted
         view.onDragActiveChange = onDragActiveChange
         view.onSelection = onSelection
@@ -40,11 +58,19 @@ struct ShelfDragSource: NSViewRepresentable {
         view.onShowInFinder = onShowInFinder
         view.onKeepPathsOnly = onKeepPathsOnly
         view.onClear = onClear
+        view.onReorder = onReorder
+        view.updateAccessibility()
         return view
     }
 
     func updateNSView(_ nsView: DragSourceView, context: Context) {
         nsView.contents = contents
+        nsView.itemIDs = itemIDs
+        nsView.reorderScopeID = reorderScopeID
+        nsView.reorderTargetID = reorderTargetID
+        nsView.reorderAxis = reorderAxis
+        nsView.itemLabel = itemLabel
+        nsView.isSelected = isSelected
         nsView.onCompleted = onCompleted
         nsView.onDragActiveChange = onDragActiveChange
         nsView.onSelection = onSelection
@@ -55,10 +81,18 @@ struct ShelfDragSource: NSViewRepresentable {
         nsView.onShowInFinder = onShowInFinder
         nsView.onKeepPathsOnly = onKeepPathsOnly
         nsView.onClear = onClear
+        nsView.onReorder = onReorder
+        nsView.updateAccessibility()
     }
 
     final class DragSourceView: NSView, NSDraggingSource {
         var contents: [ShelfItem.Content] = []
+        var itemIDs: [ShelfItem.ID] = []
+        var reorderScopeID: ShelfFeature.State.ID?
+        var reorderTargetID: ShelfItem.ID?
+        var reorderAxis: Axis = .horizontal
+        var itemLabel: String?
+        var isSelected = false
         var onCompleted: ([ShelfItem.Content]) -> Void = { _ in }
         var onDragActiveChange: (Bool) -> Void = { _ in }
         var onSelection: () -> Void = {}
@@ -69,12 +103,69 @@ struct ShelfDragSource: NSViewRepresentable {
         var onShowInFinder: ([ShelfItem.Content]) -> Void = { _ in }
         var onKeepPathsOnly: (() -> Void)?
         var onClear: (() -> Void)?
+        var onReorder: ((
+            [ShelfItem.ID],
+            ShelfItem.ID,
+            ShelfReorderPlacement
+        ) -> Void)?
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
             true
         }
 
+        override var acceptsFirstResponder: Bool { true }
+
+        override var needsPanelToBecomeKey: Bool { true }
+
+        func updateAccessibility() {
+            guard let itemLabel else {
+                setAccessibilityElement(false)
+                return
+            }
+
+            setAccessibilityElement(true)
+            setAccessibilityRole(.button)
+            setAccessibilityLabel(itemLabel)
+            setAccessibilityValue(isSelected ? "Selected" : "Not selected")
+        }
+
+        private func claimKeyboardFocus() {
+            claimShelfKeyboardFocus()
+        }
+
+        private func sendEditingCommand(_ command: ShelfPanelKeyboardCommand) {
+            (window as? ShelfPanel)?.onKeyboardCommand(command)
+        }
+
+        // Standard Edit-menu actions are resolved through the first-responder
+        // chain before some Command-key events reach NSWindow. Expose the
+        // native selectors while keeping Swift method names unambiguous.
+        @objc(copy:)
+        private func performCopyAction(_ sender: Any?) {
+            sendEditingCommand(.copySelection)
+        }
+
+        @objc(paste:)
+        private func performPasteAction(_ sender: Any?) {
+            sendEditingCommand(.paste)
+        }
+
+        @objc(undo:)
+        private func performUndoAction(_ sender: Any?) {
+            sendEditingCommand(.undo)
+        }
+
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            guard let command = ShelfPanelKeyboardCommand(event: event) else {
+                return super.performKeyEquivalent(with: event)
+            }
+
+            sendEditingCommand(command)
+            return true
+        }
+
         override func mouseDown(with event: NSEvent) {
+            claimKeyboardFocus()
             didBeginDragging = false
             mouseDownLocation = Self.pointerLocation(for: event)
             if event.clickCount == 2 {
@@ -89,6 +180,12 @@ struct ShelfDragSource: NSViewRepresentable {
             }
             guard event.clickCount == 1, !didBeginDragging else { return }
             onSelection()
+            Task { @MainActor [weak self] in
+                // SwiftUI may update the representable after selection. Restore
+                // the persistent root responder on the following actor turn.
+                await Task.yield()
+                self?.claimKeyboardFocus()
+            }
         }
 
         override func menu(for event: NSEvent) -> NSMenu? {
@@ -193,6 +290,7 @@ struct ShelfDragSource: NSViewRepresentable {
         }
 
         override func rightMouseDown(with event: NSEvent) {
+            claimKeyboardFocus()
             onContextMenu()
             guard let menu = menu(for: event) else { return }
             NSMenu.popUpContextMenu(menu, with: event, for: self)
@@ -220,10 +318,150 @@ struct ShelfDragSource: NSViewRepresentable {
             onClear?()
         }
 
+        // MARK: - Reordering inside one shelf
+
+        private var reorderIndicatorPlacement: ShelfReorderPlacement? {
+            didSet {
+                guard reorderIndicatorPlacement != oldValue else { return }
+                needsDisplay = true
+            }
+        }
+
+        override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+            updateReorderIndicator(for: sender)
+        }
+
+        override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+            updateReorderIndicator(for: sender)
+        }
+
+        override func draggingExited(_ sender: NSDraggingInfo?) {
+            reorderIndicatorPlacement = nil
+        }
+
+        override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            reorderSource(for: sender) != nil
+        }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            guard let source = reorderSource(for: sender),
+                  let targetID = reorderTargetID,
+                  let onReorder else {
+                reorderIndicatorPlacement = nil
+                return false
+            }
+
+            let placement = Self.reorderPlacement(
+                at: convert(sender.draggingLocation, from: nil),
+                in: bounds,
+                axis: reorderAxis,
+                isFlipped: isFlipped
+            )
+            let movingIDs = source.itemIDs
+            source.markAsReordered()
+            reorderIndicatorPlacement = nil
+
+            // Reordering destroys and recreates representable views. Defer the
+            // state mutation until AppKit has finished this drop callback.
+            DispatchQueue.main.async {
+                onReorder(movingIDs, targetID, placement)
+            }
+            return true
+        }
+
+        private func updateReorderIndicator(
+            for sender: NSDraggingInfo
+        ) -> NSDragOperation {
+            guard reorderSource(for: sender) != nil else {
+                reorderIndicatorPlacement = nil
+                return []
+            }
+
+            reorderIndicatorPlacement = Self.reorderPlacement(
+                at: convert(sender.draggingLocation, from: nil),
+                in: bounds,
+                axis: reorderAxis,
+                isFlipped: isFlipped
+            )
+            return .move
+        }
+
+        private func reorderSource(
+            for sender: NSDraggingInfo
+        ) -> DragSourceView? {
+            guard let source = sender.draggingSource as? DragSourceView,
+                  source !== self,
+                  let reorderScopeID,
+                  source.reorderScopeID == reorderScopeID,
+                  let reorderTargetID,
+                  !source.itemIDs.isEmpty,
+                  !source.itemIDs.contains(reorderTargetID),
+                  onReorder != nil else { return nil }
+            return source
+        }
+
+        static func reorderPlacement(
+            at point: CGPoint,
+            in bounds: CGRect,
+            axis: Axis,
+            isFlipped: Bool
+        ) -> ShelfReorderPlacement {
+            switch axis {
+            case .horizontal:
+                point.x < bounds.midX ? .before : .after
+            case .vertical:
+                if isFlipped {
+                    point.y < bounds.midY ? .before : .after
+                } else {
+                    point.y > bounds.midY ? .before : .after
+                }
+            }
+        }
+
+        override func draw(_ dirtyRect: NSRect) {
+            super.draw(dirtyRect)
+            guard let reorderIndicatorPlacement else { return }
+
+            let thickness: CGFloat = 3
+            let indicatorFrame: CGRect
+            switch reorderAxis {
+            case .horizontal:
+                indicatorFrame = CGRect(
+                    x: reorderIndicatorPlacement == .before
+                        ? bounds.minX
+                        : bounds.maxX - thickness,
+                    y: bounds.minY + 4,
+                    width: thickness,
+                    height: max(0, bounds.height - 8)
+                )
+            case .vertical:
+                let beforeY = isFlipped
+                    ? bounds.minY
+                    : bounds.maxY - thickness
+                let afterY = isFlipped
+                    ? bounds.maxY - thickness
+                    : bounds.minY
+                indicatorFrame = CGRect(
+                    x: bounds.minX + 4,
+                    y: reorderIndicatorPlacement == .before ? beforeY : afterY,
+                    width: max(0, bounds.width - 8),
+                    height: thickness
+                )
+            }
+
+            NSColor.controlAccentColor.setFill()
+            NSBezierPath(
+                roundedRect: indicatorFrame,
+                xRadius: thickness / 2,
+                yRadius: thickness / 2
+            ).fill()
+        }
+
         /// Snapshot taken when the drag begins, so a shelf that changes mid-drag
         /// can't confuse what actually left.
         private var draggedContents: [ShelfItem.Content] = []
         private var completedAsShare = false
+        private var completedAsReorder = false
         private var didBeginDragging = false
         private var mouseDownLocation: CGPoint?
 
@@ -265,12 +503,17 @@ struct ShelfDragSource: NSViewRepresentable {
 
             draggedContents = contents
             completedAsShare = false
+            completedAsReorder = false
             onDragActiveChange(true)
             beginDraggingSession(with: items, event: event, source: self)
         }
 
         func markAsShared() {
             completedAsShare = true
+        }
+
+        func markAsReordered() {
+            completedAsReorder = true
         }
 
         private func copyToClipboard(_ contents: [ShelfItem.Content]) {
@@ -286,6 +529,10 @@ struct ShelfDragSource: NSViewRepresentable {
             let dragged = draggedContents.isEmpty ? contents : draggedContents
             let carriesFile = dragged.contains { if case .file = $0 { true } else { false } }
 
+            if context == .withinApplication, reorderScopeID != nil {
+                return [.copy, .move]
+            }
+
             // Only a file can meaningfully be moved — the destination relocates it.
             // Text is always handed over as a copy: offering .move lets a receiver
             // (Slack, for one) settle on it and then insert nothing.
@@ -300,13 +547,16 @@ struct ShelfDragSource: NSViewRepresentable {
             NSLog("[Shelfer] dragOut ended operation=%lu count=%d", operation.rawValue, draggedContents.count)
             onDragActiveChange(false)
             let completed = draggedContents
-            let wasShared = completedAsShare
+            let wasConsumedInsideShelfer = completedAsShare || completedAsReorder
             draggedContents = []
             completedAsShare = false
+            completedAsReorder = false
 
             // An empty operation means the drop was rejected or cancelled,
             // so the items stay on the shelf.
-            guard !wasShared, !operation.isEmpty, !completed.isEmpty else { return }
+            guard !wasConsumedInsideShelfer,
+                  !operation.isEmpty,
+                  !completed.isEmpty else { return }
 
             // Deferred out of the drag callback: removing the last item hides the
             // panel, and ordering a window out while the session is still closing

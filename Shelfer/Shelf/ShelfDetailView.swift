@@ -27,6 +27,12 @@ struct ShelfDetailView: View {
 
             Spacer(minLength: 0)
         }
+        // Cover the complete empty surface, not just the title row. Controls
+        // and items remain above this view, while any exposed shelf material
+        // can now claim keyboard focus (and continue to act as a drag handle).
+        .background {
+            WindowDragTarget()
+        }
         .task(id: store.items) {
             await loadInfos()
         }
@@ -71,11 +77,11 @@ struct ShelfDetailView: View {
                 }
             }
         }
-        // The controls remain above this view and keep their normal button
-        // behaviour. Only the otherwise empty parts of the header reach the
-        // drag target and move the panel.
+        // Keep the automation/accessibility focus target scoped to the header.
+        // Marking the full-size background as one AX element would overlap the
+        // item scroll view and make its buttons ambiguous to assistive clients.
         .background {
-            WindowDragTarget()
+            WindowDragTarget(accessibilityLabel: "Shelf background")
         }
     }
 
@@ -110,22 +116,32 @@ struct ShelfDetailView: View {
             store.items.filter { selectedItemIDs.contains($0.id) }
         )
 
-        return ScrollView(.horizontal, showsIndicators: false) {
-            LazyHStack(alignment: .top, spacing: 22) {
-                ForEach(store.items) { item in
-                    gridTile(
-                        for: item,
-                        selectedItemIDs: selectedItemIDs,
-                        selectedItems: selectedItems
-                    )
+        return ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                LazyHStack(alignment: .top, spacing: 22) {
+                    ForEach(store.items) { item in
+                        gridTile(
+                            for: item,
+                            selectedItemIDs: selectedItemIDs,
+                            selectedItems: selectedItems
+                        )
+                        .id(item.id)
+                    }
+                    revealTile
                 }
-                revealTile
+                // A short row still fills the visible content width, making the
+                // empty part beside its tiles useful as a panel drag handle.
+                .frame(minWidth: ShelfDetailMetrics.contentWidth, alignment: .leading)
+                .background {
+                    WindowDragTarget()
+                }
+                .animation(
+                    .easeInOut(duration: 0.18),
+                    value: Array(store.items.ids)
+                )
             }
-            // A short row still fills the visible content width, making the
-            // empty part beside its tiles useful as a panel drag handle.
-            .frame(minWidth: ShelfDetailMetrics.contentWidth, alignment: .leading)
-            .background {
-                WindowDragTarget()
+            .onChange(of: selectedItemIDs) { _, ids in
+                scrollToSingleSelection(ids, with: proxy)
             }
         }
     }
@@ -179,54 +195,75 @@ struct ShelfDetailView: View {
             store.items.filter { selectedItemIDs.contains($0.id) }
         )
 
-        return ScrollView(showsIndicators: false) {
-            LazyVStack(spacing: 10) {
-                ForEach(store.items) { item in
-                    HStack(spacing: 10) {
-                        ShelfItemIcon(item: item, size: 28)
+        return ScrollViewReader { proxy in
+            ScrollView(showsIndicators: false) {
+                LazyVStack(spacing: 10) {
+                    ForEach(store.items) { item in
+                        HStack(spacing: 10) {
+                            ShelfItemIcon(item: item, size: 28)
 
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(item.displayName)
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                            Text(subtitle(for: item))
-                                .font(.system(size: 11))
-                                .foregroundStyle(.white.opacity(0.6))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(item.displayName)
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                    .truncationMode(.middle)
+                                Text(subtitle(for: item))
+                                    .font(.system(size: 11))
+                                    .foregroundStyle(.white.opacity(0.6))
+                            }
+
+                            Spacer(minLength: 0)
                         }
-
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 4)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background {
-                        selectionBackground(for: item, cornerRadius: 9)
-                    }
-                    .overlay {
-                        itemDragSource(
-                            for: item,
-                            selectedItemIDs: selectedItemIDs,
-                            selectedItems: selectedItems
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background {
+                            selectionBackground(for: item, cornerRadius: 9)
+                        }
+                        .overlay {
+                            itemDragSource(
+                                for: item,
+                                selectedItemIDs: selectedItemIDs,
+                                selectedItems: selectedItems
+                            )
+                        }
+                        .overlay {
+                            copyFeedback(for: item)
+                        }
+                        .animation(
+                            .easeOut(duration: 0.15),
+                            value: store.copyFeedbackTarget == .item(item.id)
                         )
+                        .animation(.easeOut(duration: 0.12), value: isSelected(item))
+                        .id(item.id)
                     }
-                    .overlay {
-                        copyFeedback(for: item)
-                    }
-                    .animation(
-                        .easeOut(duration: 0.15),
-                        value: store.copyFeedbackTarget == .item(item.id)
-                    )
-                    .animation(.easeOut(duration: 0.12), value: isSelected(item))
-                }
 
-                revealRow
+                    revealRow
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background {
+                    WindowDragTarget()
+                }
+                .animation(
+                    .easeInOut(duration: 0.18),
+                    value: Array(store.items.ids)
+                )
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                WindowDragTarget()
+            .onChange(of: selectedItemIDs) { _, ids in
+                scrollToSingleSelection(ids, with: proxy)
             }
+        }
+    }
+
+    private func scrollToSingleSelection(
+        _ selectedItemIDs: Set<ShelfItem.ID>,
+        with proxy: ScrollViewProxy
+    ) {
+        guard selectedItemIDs.count == 1,
+              let id = selectedItemIDs.first else { return }
+        withAnimation(.easeOut(duration: 0.16)) {
+            proxy.scrollTo(id, anchor: .center)
         }
     }
 
@@ -245,6 +282,12 @@ struct ShelfDetailView: View {
 
         return ShelfDragSource(
             contents: targetedContents,
+            itemIDs: targetedItems.map(\.id),
+            reorderScopeID: store.id,
+            reorderTargetID: item.id,
+            reorderAxis: store.layout == .grid ? .horizontal : .vertical,
+            itemLabel: item.displayName,
+            isSelected: selectedItemIDs.contains(item.id),
             onCompleted: { store.send(.itemsDraggedOut($0)) },
             onDragActiveChange: { store.send(.shelfDragActivityChanged($0)) },
             onSelection: { store.send(.itemSelectionToggled(item.id)) },
@@ -260,6 +303,15 @@ struct ShelfDetailView: View {
             },
             onClear: {
                 store.send(.itemsClearRequested(Set(targetedItems.map(\.id))))
+            },
+            onReorder: { movingIDs, targetID, placement in
+                store.send(
+                    .itemsReorderRequested(
+                        movingIDs,
+                        relativeTo: targetID,
+                        placement: placement
+                    )
+                )
             }
         )
     }
@@ -457,12 +509,33 @@ enum ShelfDetailMetrics {
 }
 
 /// Turns only the background beneath detail content into a panel drag handle.
-private struct WindowDragTarget: NSViewRepresentable {
-    func makeNSView(context: Context) -> TargetView {
-        TargetView()
+struct WindowDragTarget: NSViewRepresentable {
+    var accessibilityLabel: String?
+
+    init(accessibilityLabel: String? = nil) {
+        self.accessibilityLabel = accessibilityLabel
     }
 
-    func updateNSView(_ nsView: TargetView, context: Context) {}
+    func makeNSView(context: Context) -> TargetView {
+        let view = TargetView()
+        updateAccessibility(of: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: TargetView, context: Context) {
+        updateAccessibility(of: nsView)
+    }
+
+    private func updateAccessibility(of view: TargetView) {
+        guard let accessibilityLabel else {
+            view.setAccessibilityElement(false)
+            return
+        }
+
+        view.setAccessibilityElement(true)
+        view.setAccessibilityRole(.group)
+        view.setAccessibilityLabel(accessibilityLabel)
+    }
 
     final class TargetView: NSView {
         private var initialMouseLocation: CGPoint?
@@ -472,7 +545,44 @@ private struct WindowDragTarget: NSViewRepresentable {
             true
         }
 
+        override var acceptsFirstResponder: Bool { true }
+
+        override var needsPanelToBecomeKey: Bool { true }
+
+        private func claimKeyboardFocus() {
+            claimShelfKeyboardFocus()
+        }
+
+        private func sendEditingCommand(_ command: ShelfPanelKeyboardCommand) {
+            (window as? ShelfPanel)?.onKeyboardCommand(command)
+        }
+
+        @objc(copy:)
+        private func performCopyAction(_ sender: Any?) {
+            sendEditingCommand(.copySelection)
+        }
+
+        @objc(paste:)
+        private func performPasteAction(_ sender: Any?) {
+            sendEditingCommand(.paste)
+        }
+
+        @objc(undo:)
+        private func performUndoAction(_ sender: Any?) {
+            sendEditingCommand(.undo)
+        }
+
+        override func performKeyEquivalent(with event: NSEvent) -> Bool {
+            guard let command = ShelfPanelKeyboardCommand(event: event) else {
+                return super.performKeyEquivalent(with: event)
+            }
+
+            sendEditingCommand(command)
+            return true
+        }
+
         override func mouseDown(with event: NSEvent) {
+            claimKeyboardFocus()
             initialMouseLocation = NSEvent.mouseLocation
             initialWindowOrigin = window?.frame.origin
         }
