@@ -216,6 +216,43 @@ session.observeAnchor(id: "3F-lobby-qr")
 `Info.plist` needs `NSMotionUsageDescription`. Nothing else — no location
 permission, no Bluetooth, no network.
 
+### Side by side with the system's blue dot
+
+The cheapest way to see what this actually does: put our estimate on the same
+map as CoreLocation's, in red, and walk.
+
+```swift
+@StateObject private var pdr = PDRSession(map: nil, source: CoreMotionSource())
+
+Map {
+    UserAnnotation()                                     // the system's blue dot
+    if let coordinate = pdr.clCoordinate {
+        Annotation("PDR", coordinate: coordinate) {
+            PDRDot(
+                isAmbiguous: pdr.fix?.isAmbiguous ?? true,
+                accuracy: pdr.fix?.horizontalAccuracy
+            )
+        }
+    }
+    MapPolyline(coordinates: pdr.clCoordinateTrack).stroke(.red, lineWidth: 3)
+}
+.onAppear {
+    // Stand still, face the way you are about to walk, then start.
+    pdr.start(at: currentCoordinate, walkingBearingDegrees: currentHeading)
+}
+```
+
+`GeoAnchor` is what ties the plan's metre grid to the world: an origin, and the
+true bearing of the plan's +X axis. `start(at:walkingBearingDegrees:)` sets both
+from where the user is standing, so the red dot begins exactly on top of the
+blue one and diverges from there. **That divergence is the measurement.** It
+buys nothing for absolute accuracy — the estimate inherits every metre of error
+in the fix it was seeded with — but it needs no survey at all.
+
+With `map: nil` there is no corridor constraint, so this is pure dead reckoning:
+expect it to drift, and expect the drift to be the point. Pass a real
+`IndoorMap` and the constraint switches on.
+
 ### Drawing the plan
 
 `IndoorMap` is `Codable`, so a plan is a JSON file:
