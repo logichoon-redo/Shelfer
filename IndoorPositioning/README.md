@@ -144,9 +144,21 @@ backlog. The thresholds encoding that judgement are in
 
 ### Recording the walks
 
-`MotionLog` is the CSV format for both. Record once, replay a hundred times —
-re-walking the corridor after every parameter change is how a two-day
-investigation becomes a two-week one.
+`MotionRecorder` captures the stream to a `MotionLog` CSV. Record once, replay a
+hundred times — re-walking the corridor after every parameter change is how a
+two-day investigation becomes a two-week one.
+
+```swift
+let recorder = MotionRecorder(source: CoreMotionSource(sampleRate: 50))
+recorder.start()                       // walk the surveyed line
+recorder.stop()
+let url = try recorder.writeLog()      // hand to a share sheet, or Files.app
+```
+
+`Info.plist` needs `NSMotionUsageDescription`; add `UIFileSharingEnabled` and
+`LSSupportsOpeningDocumentsInPlace` if you want to pull the CSV off the device
+with the Files app. Set `recorder.passthrough` to drive a live `PDREngine` from
+the same samples while recording.
 
 ```sh
 swift run pdr-validate template --out reference.csv   # shows the format
@@ -158,6 +170,20 @@ sinusoids; real accelerometer signals are not sinusoids. Any accuracy number
 from synthetic input is a property of that file, and it says so when you run it.
 
 ---
+
+## Running it
+
+Nothing here needs a phone until step 3.
+
+```sh
+cd IndoorPositioning
+swift test                                    # the whole pipeline, offline
+swift run pdr-validate                        # usage
+swift run pdr-validate drift --distance 100   # synthetic; checks the machinery
+```
+
+Then record a real walk (see below), and re-run `drift` and `carriage` against
+it. That is the point at which the numbers start meaning something.
 
 ## Using it
 
@@ -225,7 +251,8 @@ Sources/PDRCore/
   Filter/       ParticleFilter
   Engine/       PDREngine, PositionFix
   Validation/   MotionLog, SyntheticWalk, DriftExperiment
-Sources/PDRMotion/    CoreMotion adapter, replay source, PDRSession, PDRMapView
+Sources/PDRMotion/    CoreMotion adapter, replay source, MotionRecorder,
+                      PDRSession, PDRMapView
 Sources/pdr-validate/ the two experiments as a CLI
 ```
 
