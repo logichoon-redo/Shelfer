@@ -70,11 +70,47 @@ struct ShelfSurfaceTests {
         #expect(source.needsPanelToBecomeKey)
     }
 
+    @Test func itemOverlayReceivesExternalDropsWithoutLookingUpAnotherView() async throws {
+        let source = ShelfDragSource.DragSourceView()
+        source.acceptsExternalDrops = true
+        var targetedStates: [Bool] = []
+        var droppedContents: [[ShelfItem.Content]] = []
+        source.onTargetedChange = { targetedStates.append($0) }
+        source.onDrop = { droppedContents.append($0) }
+
+        let pasteboard = NSPasteboard(
+            name: NSPasteboard.Name("ShelferTests.ItemOverlayExternalDrop")
+        )
+        pasteboard.clearContents()
+        let fileURL = URL(fileURLWithPath: "/tmp/Shelfer-Item-Overlay-Drop.txt")
+        #expect(pasteboard.writeObjects([fileURL as NSURL]))
+        let draggingInfo = TestDraggingInfo(pasteboard: pasteboard)
+
+        #expect(source.draggingEntered(draggingInfo) == .copy)
+        #expect(targetedStates == [true])
+        #expect(source.prepareForDragOperation(draggingInfo))
+        #expect(source.performDragOperation(draggingInfo))
+
+        await Task.yield()
+        #expect(droppedContents == [[.file(fileURL)]])
+    }
+
     @Test func detailBackgroundCanMakeThePanelKeyForEditingShortcuts() {
         let background = WindowDragTarget.TargetView()
 
         #expect(background.acceptsFirstResponder)
         #expect(background.needsPanelToBecomeKey)
+    }
+
+    @Test func detailBackgroundRecognizesAClickWithoutLosingItsFocusBehavior() throws {
+        let background = WindowDragTarget.TargetView()
+        var clickCount = 0
+        background.onClick = { clickCount += 1 }
+
+        background.mouseDown(with: try #require(leftClickEvent(type: .leftMouseDown)))
+        background.mouseUp(with: try #require(leftClickEvent(type: .leftMouseUp)))
+
+        #expect(clickCount == 1)
     }
 
     @Test func shelfPanelRoutesEditingKeyboardCommands() throws {
@@ -151,6 +187,23 @@ struct ShelfSurfaceTests {
         #expect(received == [.copySelection, .paste, .undo])
     }
 
+    @Test func shelfEntranceUsesAShortLayerAnimationWithoutChangingItsFrame() {
+        let frame = CGRect(x: 20, y: 30, width: 200, height: 288)
+        let root = ShelfPanelRootView(frame: frame)
+
+        root.animateEntrance(
+            duration: ShelfMetrics.entranceAnimationDuration,
+            initialScale: ShelfMetrics.entranceAnimationInitialScale
+        )
+
+        #expect(root.frame == frame)
+        #expect(root.isEntranceAnimationActiveForTesting)
+        #expect(ShelfMetrics.entranceAnimationDuration == 0.30)
+
+        root.cancelEntranceAnimation()
+        #expect(!root.isEntranceAnimationActiveForTesting)
+    }
+
     @Test func editingShortcutsDoNotDependOnTheActiveInputLanguage() throws {
         #expect(
             ShelfPanelKeyboardCommand(
@@ -209,6 +262,73 @@ struct ShelfSurfaceTests {
                 axis: .vertical,
                 isFlipped: false
             ) == .after
+        )
+    }
+
+    @Test func anUnselectedItemCanResolveAReorderAnywhereInsideTheShelf() {
+        let first = ShelfItem(.text("first"))
+        let second = ShelfItem(.text("second"))
+        let shelfFrame = CGRect(x: 0, y: 0, width: 300, height: 180)
+        let candidates = [
+            ShelfDragSource.DragSourceView.ReorderCandidate(
+                id: first.id,
+                frame: CGRect(x: 20, y: 40, width: 80, height: 90)
+            ),
+            ShelfDragSource.DragSourceView.ReorderCandidate(
+                id: second.id,
+                frame: CGRect(x: 150, y: 40, width: 80, height: 90)
+            ),
+        ]
+
+        #expect(
+            ShelfDragSource.DragSourceView.localDropResolution(
+                at: CGPoint(x: 260, y: 90),
+                shelfFrame: shelfFrame,
+                candidates: candidates,
+                movingIDs: [first.id],
+                axis: .horizontal
+            ) == .reorder(second.id, .after)
+        )
+        #expect(
+            ShelfDragSource.DragSourceView.localDropResolution(
+                at: CGPoint(x: 60, y: 90),
+                shelfFrame: shelfFrame,
+                candidates: candidates,
+                movingIDs: [first.id],
+                axis: .horizontal
+            ) == .keepOnShelf
+        )
+        #expect(
+            ShelfDragSource.DragSourceView.localDropResolution(
+                at: CGPoint(x: 340, y: 90),
+                shelfFrame: shelfFrame,
+                candidates: candidates,
+                movingIDs: [first.id],
+                axis: .horizontal
+            ) == .outsideShelf
+        )
+    }
+
+    @Test func reorderAutoScrollAcceleratesTowardHiddenItemsAtEitherEdge() {
+        let visibleRange: ClosedRange<CGFloat> = 100...300
+
+        #expect(
+            ShelfDragSource.DragSourceView.autoScrollStep(
+                pointerCoordinate: 100,
+                visibleRange: visibleRange
+            ) == -ShelfDragSource.DragSourceView.maximumAutoScrollStep
+        )
+        #expect(
+            ShelfDragSource.DragSourceView.autoScrollStep(
+                pointerCoordinate: 300,
+                visibleRange: visibleRange
+            ) == ShelfDragSource.DragSourceView.maximumAutoScrollStep
+        )
+        #expect(
+            ShelfDragSource.DragSourceView.autoScrollStep(
+                pointerCoordinate: 200,
+                visibleRange: visibleRange
+            ) == 0
         )
     }
 
@@ -626,4 +746,44 @@ struct ShelfSurfaceTests {
             keyCode: keyCode
         )
     }
+}
+
+@MainActor
+private final class TestDraggingInfo: NSObject, NSDraggingInfo {
+    let draggingPasteboard: NSPasteboard
+    let draggingSequenceNumber: Int
+
+    var draggingDestinationWindow: NSWindow? { nil }
+    var draggingSourceOperationMask: NSDragOperation { .copy }
+    var draggingLocation: NSPoint { .zero }
+    var draggedImageLocation: NSPoint { .zero }
+    var draggedImage: NSImage? { nil }
+    var draggingSource: Any? { nil }
+    var draggingFormation: NSDraggingFormation = .none
+    var animatesToDestination = false
+    var numberOfValidItemsForDrop = 1
+    var springLoadingHighlight: NSSpringLoadingHighlight { .none }
+
+    init(pasteboard: NSPasteboard, sequenceNumber: Int = 1) {
+        draggingPasteboard = pasteboard
+        draggingSequenceNumber = sequenceNumber
+    }
+
+    func slideDraggedImage(to screenPoint: NSPoint) {}
+
+    override func namesOfPromisedFilesDropped(
+        atDestination dropDestination: URL
+    ) -> [String]? {
+        nil
+    }
+
+    func enumerateDraggingItems(
+        options enumOpts: NSDraggingItemEnumerationOptions,
+        for view: NSView?,
+        classes classArray: [AnyClass],
+        searchOptions: [NSPasteboard.ReadingOptionKey: Any],
+        using block: (NSDraggingItem, Int, UnsafeMutablePointer<ObjCBool>) -> Void
+    ) {}
+
+    func resetSpringLoading() {}
 }

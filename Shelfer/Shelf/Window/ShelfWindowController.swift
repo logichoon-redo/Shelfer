@@ -125,6 +125,7 @@ final class ShelfWindowController {
 
         let panel = panel ?? makePanel()
         self.panel = panel
+        let shouldAnimateEntrance = !panel.isVisible
         syncTopControls(
             in: panel,
             dockedEdge: dockedEdge,
@@ -164,7 +165,9 @@ final class ShelfWindowController {
             // (including its material/background and window-level reset).
             appliedPosition = position
             syncNotchDock(panel, to: notchDock, fullPanelSize: panelSize)
-            panel.orderFrontRegardless()
+            // A direct notch drop immediately starts the Genie suction. A
+            // second entrance transform would make that sheet pop first.
+            orderFront(panel, animatingEntrance: false)
             return
         }
 
@@ -177,7 +180,7 @@ final class ShelfWindowController {
         }
 
         syncDocking(panel, to: dockedEdge, panelSize: panelSize)
-        panel.orderFrontRegardless()
+        orderFront(panel, animatingEntrance: shouldAnimateEntrance)
     }
 
     private func syncNotchDock(
@@ -185,6 +188,7 @@ final class ShelfWindowController {
         to notchDock: ShelfNotchDock,
         fullPanelSize: CGSize
     ) {
+        (panel.contentView as? ShelfPanelRootView)?.cancelEntranceAnimation()
         let previousPresentation = appliedNotchDock?.presentation
 
         if appliedNotchDock == nil {
@@ -255,7 +259,11 @@ final class ShelfWindowController {
                 panel.setFrame(targetFrame, display: true, animate: false)
             }
         case .peeking:
-            animate(panel, to: targetFrame, duration: ShelfNotchMetrics.peekAnimationDuration)
+            animate(
+                panel,
+                to: targetFrame,
+                duration: ShelfNotchMetrics.peekRevealAnimationDuration
+            )
         }
     }
 
@@ -330,7 +338,7 @@ final class ShelfWindowController {
                   let currentDock = self.store.notchDock,
                   currentDock.presentation == .stowed || currentDock.presentation == .peeking {
                 guard !panel.isUserDragging else {
-                    try? await Task.sleep(for: .milliseconds(40))
+                    try? await Task.sleep(for: ShelfNotchMetrics.hoverPollingInterval)
                     continue
                 }
 
@@ -358,7 +366,7 @@ final class ShelfWindowController {
                     return
                 }
 
-                try? await Task.sleep(for: .milliseconds(40))
+                try? await Task.sleep(for: ShelfNotchMetrics.hoverPollingInterval)
             }
         }
     }
@@ -379,7 +387,7 @@ final class ShelfWindowController {
         notchStowResizeID = resizeID
         notchStowResizeTask = Task { @MainActor [weak self, weak panel] in
             try? await Task.sleep(
-                for: .seconds(ShelfNotchMetrics.peekAnimationDuration)
+                for: .seconds(ShelfNotchMetrics.peekHideAnimationDuration)
             )
 
             guard !Task.isCancelled,
@@ -547,6 +555,20 @@ final class ShelfWindowController {
         panel.setFrame(frame, display: true, animate: shouldAnimate)
     }
 
+    private func orderFront(
+        _ panel: ShelfPanel,
+        animatingEntrance shouldAnimateEntrance: Bool
+    ) {
+        panel.orderFrontRegardless()
+        guard shouldAnimateEntrance,
+              !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion,
+              let root = panel.contentView as? ShelfPanelRootView else { return }
+        root.animateEntrance(
+            duration: ShelfMetrics.entranceAnimationDuration,
+            initialScale: ShelfMetrics.entranceAnimationInitialScale
+        )
+    }
+
     private func makePanel() -> ShelfPanel {
         let panelSize = ShelfShareMetrics.panelSize(for: ShelfMetrics.size)
         let panel = ShelfPanel(contentRect: NSRect(origin: .zero, size: panelSize))
@@ -684,7 +706,7 @@ final class ShelfWindowController {
             // precisely to the camera housing after Window Server movement.
             let fullSize = ShelfShareMetrics.panelSize(for: ShelfMetrics.size)
             let target = notchFrame(for: notchDock, fullPanelSize: fullSize)
-            animate(panel, to: target, duration: ShelfNotchMetrics.peekAnimationDuration)
+            animate(panel, to: target, duration: ShelfNotchMetrics.peekHideAnimationDuration)
             return
         }
 

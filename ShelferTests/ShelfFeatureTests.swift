@@ -470,6 +470,22 @@ struct ShelfFeatureTests {
         }
     }
 
+    @Test func clickingTheExpandedShelfBackgroundClearsTheSelection() async {
+        let first = ShelfItem(.file(url("a.txt")))
+        let second = ShelfItem(.file(url("b.txt")))
+        let store = makeStore(
+            ShelfFeature.State(
+                items: [first, second],
+                isExpanded: true,
+                selectedItemIDs: [first.id, second.id]
+            )
+        )
+
+        await store.send(.backgroundTapped) {
+            $0.selectedItemIDs = []
+        }
+    }
+
     @Test func arrowKeysMoveToOneAdjacentItemAndStopAtTheEdges() async {
         let first = ShelfItem(.text("first"))
         let second = ShelfItem(.text("second"))
@@ -727,6 +743,38 @@ struct ShelfFeatureTests {
         await store.send(.undoRequested) {
             $0.items = originalItems
             $0.undoHistory = []
+        }
+    }
+
+    @Test func reorderingAnUnselectedItemDoesNotChangeTheSelection() async {
+        let first = ShelfItem(.text("first"))
+        let second = ShelfItem(.text("second"))
+        let third = ShelfItem(.text("third"))
+        let originalItems: IdentifiedArrayOf<ShelfItem> = [first, second, third]
+        let store = makeStore(
+            ShelfFeature.State(
+                items: originalItems,
+                isExpanded: true,
+                selectedItemIDs: [first.id]
+            )
+        )
+
+        await store.send(
+            .itemsReorderRequested(
+                [third.id],
+                relativeTo: first.id,
+                placement: .before
+            )
+        ) {
+            $0.items = [third, first, second]
+            $0.undoHistory = [
+                ShelfFeature.EditSnapshot(
+                    items: originalItems,
+                    selectedItemIDs: [first.id],
+                    isExpanded: true,
+                    showsEmptyCloseButton: false
+                )
+            ]
         }
     }
 

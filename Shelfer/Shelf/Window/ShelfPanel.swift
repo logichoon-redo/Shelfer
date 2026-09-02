@@ -402,6 +402,8 @@ final class ShelfBackgroundView: NSVisualEffectView {
 /// The window is taller than the material shelf so its sharing dock can sit in
 /// truly transparent space below it. Only `shelfBackground` receives material.
 final class ShelfPanelRootView: NSView {
+    private static let entranceAnimationKey = "shelf.entrance"
+
     let shelfBackground = ShelfBackgroundView(frame: .zero)
     var onKeyboardCommand: (ShelfPanelKeyboardCommand) -> Void = { _ in }
     weak var suctionContentView: NSView? {
@@ -482,15 +484,53 @@ final class ShelfPanelRootView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        wantsLayer = true
         addSubview(shelfBackground)
         layoutShelfBackground()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
+        wantsLayer = true
         addSubview(shelfBackground)
         layoutShelfBackground()
     }
+
+    func animateEntrance(duration: TimeInterval, initialScale: CGFloat) {
+        guard let layer else { return }
+
+        layer.removeAnimation(forKey: Self.entranceAnimationKey)
+
+        let scale = CAKeyframeAnimation(keyPath: "transform.scale")
+        scale.values = [initialScale, 1]
+        scale.keyTimes = [0, 1]
+
+        let opacity = CAKeyframeAnimation(keyPath: "opacity")
+        opacity.values = [0.72, 1]
+        opacity.keyTimes = [0, 1]
+
+        let animation = CAAnimationGroup()
+        animation.animations = [scale, opacity]
+        animation.duration = duration
+        animation.timingFunction = CAMediaTimingFunction(
+            controlPoints: 0.2,
+            0.82,
+            0.32,
+            1
+        )
+        animation.isRemovedOnCompletion = true
+        layer.add(animation, forKey: Self.entranceAnimationKey)
+    }
+
+    func cancelEntranceAnimation() {
+        layer?.removeAnimation(forKey: Self.entranceAnimationKey)
+    }
+
+#if DEBUG
+    var isEntranceAnimationActiveForTesting: Bool {
+        layer?.animation(forKey: Self.entranceAnimationKey) != nil
+    }
+#endif
 
     override func layout() {
         super.layout()

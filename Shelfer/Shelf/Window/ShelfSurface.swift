@@ -60,7 +60,7 @@ struct ShelfSurface: NSViewRepresentable {
         nsView.onDrop = onDrop
     }
 
-    final class SurfaceView: NSView {
+    class SurfaceView: NSView {
         var onTargetedChange: (Bool) -> Void = { _ in }
         var onFilesTargetedChange: (Bool) -> Void = { _ in }
         var onPathOnlyChange: (Bool) -> Void = { _ in }

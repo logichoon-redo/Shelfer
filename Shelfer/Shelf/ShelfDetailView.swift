@@ -11,6 +11,9 @@ import UniformTypeIdentifiers
 /// The expanded shelf: what's on it, in detail, with the actions that apply.
 struct ShelfDetailView: View {
     let store: StoreOf<ShelfFeature>
+    var onExternalTargetedChange: (Bool) -> Void = { _ in }
+    var onExternalFilesTargetedChange: (Bool) -> Void = { _ in }
+    var onExternalPathOnlyChange: (Bool) -> Void = { _ in }
 
     @Dependency(\.fileInfo) private var fileInfo
     @State private var infos: [ShelfItem.ID: FileInfo] = [:]
@@ -31,7 +34,9 @@ struct ShelfDetailView: View {
         // and items remain above this view, while any exposed shelf material
         // can now claim keyboard focus (and continue to act as a drag handle).
         .background {
-            WindowDragTarget()
+            WindowDragTarget {
+                store.send(.backgroundTapped)
+            }
         }
         .task(id: store.items) {
             await loadInfos()
@@ -81,7 +86,9 @@ struct ShelfDetailView: View {
         // Marking the full-size background as one AX element would overlap the
         // item scroll view and make its buttons ambiguous to assistive clients.
         .background {
-            WindowDragTarget(accessibilityLabel: "Shelf background")
+            WindowDragTarget(accessibilityLabel: "Shelf background") {
+                store.send(.backgroundTapped)
+            }
         }
     }
 
@@ -133,7 +140,9 @@ struct ShelfDetailView: View {
                 // empty part beside its tiles useful as a panel drag handle.
                 .frame(minWidth: ShelfDetailMetrics.contentWidth, alignment: .leading)
                 .background {
-                    WindowDragTarget()
+                    WindowDragTarget {
+                        store.send(.backgroundTapped)
+                    }
                 }
                 .animation(
                     .easeInOut(duration: 0.18),
@@ -243,7 +252,9 @@ struct ShelfDetailView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background {
-                    WindowDragTarget()
+                    WindowDragTarget {
+                        store.send(.backgroundTapped)
+                    }
                 }
                 .animation(
                     .easeInOut(duration: 0.18),
@@ -286,8 +297,11 @@ struct ShelfDetailView: View {
             reorderScopeID: store.id,
             reorderTargetID: item.id,
             reorderAxis: store.layout == .grid ? .horizontal : .vertical,
+            reorderContainerSize: ShelfDetailMetrics.size,
             itemLabel: item.displayName,
             isSelected: selectedItemIDs.contains(item.id),
+            acceptsExternalDrops: true,
+            prefersPathOnlyDrop: store.prefersPathOnlyDrop,
             onCompleted: { store.send(.itemsDraggedOut($0)) },
             onDragActiveChange: { store.send(.shelfDragActivityChanged($0)) },
             onSelection: { store.send(.itemSelectionToggled(item.id)) },
@@ -304,6 +318,10 @@ struct ShelfDetailView: View {
             onClear: {
                 store.send(.itemsClearRequested(Set(targetedItems.map(\.id))))
             },
+            onExternalTargetedChange: onExternalTargetedChange,
+            onExternalFilesTargetedChange: onExternalFilesTargetedChange,
+            onExternalPathOnlyChange: onExternalPathOnlyChange,
+            onExternalDrop: { store.send(.itemsDropped($0)) },
             onReorder: { movingIDs, targetID, placement in
                 store.send(
                     .itemsReorderRequested(
@@ -511,18 +529,25 @@ enum ShelfDetailMetrics {
 /// Turns only the background beneath detail content into a panel drag handle.
 struct WindowDragTarget: NSViewRepresentable {
     var accessibilityLabel: String?
+    var onClick: () -> Void
 
-    init(accessibilityLabel: String? = nil) {
+    init(
+        accessibilityLabel: String? = nil,
+        onClick: @escaping () -> Void = {}
+    ) {
         self.accessibilityLabel = accessibilityLabel
+        self.onClick = onClick
     }
 
     func makeNSView(context: Context) -> TargetView {
         let view = TargetView()
+        view.onClick = onClick
         updateAccessibility(of: view)
         return view
     }
 
     func updateNSView(_ nsView: TargetView, context: Context) {
+        nsView.onClick = onClick
         updateAccessibility(of: nsView)
     }
 
@@ -538,8 +563,13 @@ struct WindowDragTarget: NSViewRepresentable {
     }
 
     final class TargetView: NSView {
+        var onClick: () -> Void = {}
+
         private var initialMouseLocation: CGPoint?
         private var initialWindowOrigin: CGPoint?
+        private var exceededClickTolerance = false
+
+        private static let clickMovementTolerance: CGFloat = 3
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool {
             true
@@ -585,12 +615,19 @@ struct WindowDragTarget: NSViewRepresentable {
             claimKeyboardFocus()
             initialMouseLocation = NSEvent.mouseLocation
             initialWindowOrigin = window?.frame.origin
+            exceededClickTolerance = false
         }
 
         override func mouseDragged(with event: NSEvent) {
             guard let window, let initialMouseLocation, let initialWindowOrigin else { return }
 
             let location = NSEvent.mouseLocation
+            if hypot(
+                location.x - initialMouseLocation.x,
+                location.y - initialMouseLocation.y
+            ) > Self.clickMovementTolerance {
+                exceededClickTolerance = true
+            }
             window.setFrameOrigin(
                 CGPoint(
                     x: initialWindowOrigin.x + location.x - initialMouseLocation.x,
@@ -600,8 +637,12 @@ struct WindowDragTarget: NSViewRepresentable {
         }
 
         override func mouseUp(with event: NSEvent) {
+            if !exceededClickTolerance {
+                onClick()
+            }
             initialMouseLocation = nil
             initialWindowOrigin = nil
+            exceededClickTolerance = false
         }
     }
 }

@@ -217,7 +217,10 @@ private struct ShelfNotchHandleView: View {
 
     private var peekAnimation: Animation? {
         guard !accessibilityReduceMotion else { return nil }
-        return .easeInOut(duration: ShelfNotchMetrics.peekAnimationDuration)
+        let duration = notchDock.presentation == .peeking
+            ? ShelfNotchMetrics.peekRevealAnimationDuration
+            : ShelfNotchMetrics.peekHideAnimationDuration
+        return .easeInOut(duration: duration)
     }
 }
 

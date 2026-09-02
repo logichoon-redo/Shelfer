@@ -42,7 +42,12 @@ struct ShelfView: View {
 
                 Group {
                     if store.isExpanded {
-                        ShelfDetailView(store: store)
+                        ShelfDetailView(
+                            store: store,
+                            onExternalTargetedChange: { isTargeted = $0 },
+                            onExternalFilesTargetedChange: { areFilesTargeted = $0 },
+                            onExternalPathOnlyChange: { isPathOnlyTargeted = $0 }
+                        )
                             .transition(contentTransition)
                     } else if store.isEmpty {
                         emptyState
@@ -64,6 +69,7 @@ struct ShelfView: View {
                     pathOnlyDropHint
                         .offset(y: 34)
                         .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                        .zIndex(30)
                 }
             }
         }
@@ -284,6 +290,8 @@ struct ShelfView: View {
             .overlay {
                 ShelfDragSource(
                     contents: store.items.map(\.content),
+                    acceptsExternalDrops: true,
+                    prefersPathOnlyDrop: store.prefersPathOnlyDrop,
                     onCompleted: { store.send(.itemsDraggedOut($0)) },
                     onDragActiveChange: { store.send(.shelfDragActivityChanged($0)) },
                     onDoubleClick: { store.send(.stackDoubleClicked) },
@@ -295,7 +303,11 @@ struct ShelfView: View {
                     onKeepPathsOnly: {
                         store.send(.itemsConvertToPathsRequested(Set(store.items.ids)))
                     },
-                    onClear: { store.send(.clearButtonTapped) }
+                    onClear: { store.send(.clearButtonTapped) },
+                    onExternalTargetedChange: { isTargeted = $0 },
+                    onExternalFilesTargetedChange: { areFilesTargeted = $0 },
+                    onExternalPathOnlyChange: { isPathOnlyTargeted = $0 },
+                    onExternalDrop: { store.send(.itemsDropped($0)) }
                 )
             }
             .overlay {

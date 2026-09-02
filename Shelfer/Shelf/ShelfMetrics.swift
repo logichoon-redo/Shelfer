@@ -20,6 +20,12 @@ enum ShelfMetrics {
     static let labelTextMaxWidth: CGFloat = 72
     static let labelMarqueePointsPerSecond: CGFloat = 14
 
+    /// A compact summon should feel responsive rather than theatrical. The
+    /// panel frame stays fixed so its drop and button hit regions are correct
+    /// from the first frame; only the rendered surface scales into place.
+    static let entranceAnimationDuration: TimeInterval = 0.30
+    static let entranceAnimationInitialScale: CGFloat = 0.94
+
     /// Shared by AppKit's panel resize and SwiftUI's content transition so the
     /// shelf grows and changes screens as one continuous movement.
     static let expansionAnimationDuration = 0.26
@@ -95,7 +101,11 @@ enum ShelfNotchMetrics {
     static let handleHorizontalOffset: CGFloat = -4
     static let pullDistance: CGFloat = 14
     static let retractionDuration: TimeInterval = 0.72
-    static let peekAnimationDuration: TimeInterval = 0.52
+    /// The handle should answer the pointer quickly, while its slower dismissal
+    /// preserves the stable fade that prevents it from jumping sideways.
+    static let peekRevealAnimationDuration: TimeInterval = 0.28
+    static let peekHideAnimationDuration: TimeInterval = 0.52
+    static let hoverPollingInterval: Duration = .milliseconds(16)
 }
 
 enum ShelfShareMetrics {

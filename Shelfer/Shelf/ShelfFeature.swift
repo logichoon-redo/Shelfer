@@ -138,6 +138,7 @@ struct ShelfFeature {
         case expandButtonTapped
         case backButtonTapped
         case layoutChanged(ShelfLayout)
+        case backgroundTapped
         case itemSelectionToggled(ShelfItem.ID)
         case itemContextMenuRequested(ShelfItem.ID)
         case selectionMoveRequested(ShelfSelectionNavigationDirection)
@@ -345,6 +346,11 @@ struct ShelfFeature {
                 state.layout = layout
                 return .none
 
+            case .backgroundTapped:
+                guard state.isExpanded else { return .none }
+                state.selectedItemIDs.removeAll()
+                return .none
+
             case let .itemSelectionToggled(id):
                 guard state.isExpanded, state.items[id: id] != nil else { return .none }
                 if state.selectedItemIDs.contains(id) {
@@ -493,7 +499,10 @@ struct ShelfFeature {
 
                 recordUndo(in: &state)
                 state.items = reorderedItems
-                state.selectedItemIDs = Set(orderedMovingItems.map(\.id))
+                // Reordering is a spatial edit, not a selection gesture. An
+                // unselected item can move independently, and an existing
+                // multi-selection remains exactly as the user left it.
+                state.selectedItemIDs.formIntersection(Set(reorderedItems.ids))
                 return .none
 
             case .undoRequested:

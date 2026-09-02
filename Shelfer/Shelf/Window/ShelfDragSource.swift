@@ -18,8 +18,11 @@ struct ShelfDragSource: NSViewRepresentable {
     var reorderScopeID: ShelfFeature.State.ID?
     var reorderTargetID: ShelfItem.ID?
     var reorderAxis: Axis = .horizontal
+    var reorderContainerSize: CGSize?
     var itemLabel: String?
     var isSelected = false
+    var acceptsExternalDrops = false
+    var prefersPathOnlyDrop = false
     /// Called with the dragged contents once they have landed somewhere.
     /// Not called when the drag is cancelled.
     var onCompleted: ([ShelfItem.Content]) -> Void = { _ in }
@@ -32,6 +35,10 @@ struct ShelfDragSource: NSViewRepresentable {
     var onShowInFinder: ([ShelfItem.Content]) -> Void = { _ in }
     var onKeepPathsOnly: (() -> Void)?
     var onClear: (() -> Void)?
+    var onExternalTargetedChange: (Bool) -> Void = { _ in }
+    var onExternalFilesTargetedChange: (Bool) -> Void = { _ in }
+    var onExternalPathOnlyChange: (Bool) -> Void = { _ in }
+    var onExternalDrop: ([ShelfItem.Content]) -> Void = { _ in }
     var onReorder: ((
         [ShelfItem.ID],
         ShelfItem.ID,
@@ -46,8 +53,11 @@ struct ShelfDragSource: NSViewRepresentable {
         view.reorderScopeID = reorderScopeID
         view.reorderTargetID = reorderTargetID
         view.reorderAxis = reorderAxis
+        view.reorderContainerSize = reorderContainerSize
         view.itemLabel = itemLabel
         view.isSelected = isSelected
+        view.acceptsExternalDrops = acceptsExternalDrops
+        view.prefersPathOnlyDrop = prefersPathOnlyDrop
         view.onCompleted = onCompleted
         view.onDragActiveChange = onDragActiveChange
         view.onSelection = onSelection
@@ -58,6 +68,10 @@ struct ShelfDragSource: NSViewRepresentable {
         view.onShowInFinder = onShowInFinder
         view.onKeepPathsOnly = onKeepPathsOnly
         view.onClear = onClear
+        view.onTargetedChange = onExternalTargetedChange
+        view.onFilesTargetedChange = onExternalFilesTargetedChange
+        view.onPathOnlyChange = onExternalPathOnlyChange
+        view.onDrop = onExternalDrop
         view.onReorder = onReorder
         view.updateAccessibility()
         return view
@@ -69,8 +83,11 @@ struct ShelfDragSource: NSViewRepresentable {
         nsView.reorderScopeID = reorderScopeID
         nsView.reorderTargetID = reorderTargetID
         nsView.reorderAxis = reorderAxis
+        nsView.reorderContainerSize = reorderContainerSize
         nsView.itemLabel = itemLabel
         nsView.isSelected = isSelected
+        nsView.acceptsExternalDrops = acceptsExternalDrops
+        nsView.prefersPathOnlyDrop = prefersPathOnlyDrop
         nsView.onCompleted = onCompleted
         nsView.onDragActiveChange = onDragActiveChange
         nsView.onSelection = onSelection
@@ -81,18 +98,24 @@ struct ShelfDragSource: NSViewRepresentable {
         nsView.onShowInFinder = onShowInFinder
         nsView.onKeepPathsOnly = onKeepPathsOnly
         nsView.onClear = onClear
+        nsView.onTargetedChange = onExternalTargetedChange
+        nsView.onFilesTargetedChange = onExternalFilesTargetedChange
+        nsView.onPathOnlyChange = onExternalPathOnlyChange
+        nsView.onDrop = onExternalDrop
         nsView.onReorder = onReorder
         nsView.updateAccessibility()
     }
 
-    final class DragSourceView: NSView, NSDraggingSource {
+    final class DragSourceView: ShelfSurface.SurfaceView, NSDraggingSource {
         var contents: [ShelfItem.Content] = []
         var itemIDs: [ShelfItem.ID] = []
         var reorderScopeID: ShelfFeature.State.ID?
         var reorderTargetID: ShelfItem.ID?
         var reorderAxis: Axis = .horizontal
+        var reorderContainerSize: CGSize?
         var itemLabel: String?
         var isSelected = false
+        var acceptsExternalDrops = false
         var onCompleted: ([ShelfItem.Content]) -> Void = { _ in }
         var onDragActiveChange: (Bool) -> Void = { _ in }
         var onSelection: () -> Void = {}
@@ -320,6 +343,8 @@ struct ShelfDragSource: NSViewRepresentable {
 
         // MARK: - Reordering inside one shelf
 
+        private var isForwardingExternalDrop = false
+
         private var reorderIndicatorPlacement: ShelfReorderPlacement? {
             didSet {
                 guard reorderIndicatorPlacement != oldValue else { return }
@@ -328,22 +353,54 @@ struct ShelfDragSource: NSViewRepresentable {
         }
 
         override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-            updateReorderIndicator(for: sender)
+            guard sender.draggingSource is DragSourceView else {
+                guard acceptsExternalDrops else { return [] }
+                isForwardingExternalDrop = true
+                return super.draggingEntered(sender)
+            }
+            isForwardingExternalDrop = false
+            return updateReorderIndicator(for: sender)
         }
 
         override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
-            updateReorderIndicator(for: sender)
+            guard sender.draggingSource is DragSourceView else {
+                guard acceptsExternalDrops else { return [] }
+                isForwardingExternalDrop = true
+                return super.draggingUpdated(sender)
+            }
+            return updateReorderIndicator(for: sender)
         }
 
         override func draggingExited(_ sender: NSDraggingInfo?) {
+            if isForwardingExternalDrop {
+                super.draggingExited(sender)
+                isForwardingExternalDrop = false
+            }
+            reorderIndicatorPlacement = nil
+        }
+
+        override func draggingEnded(_ sender: NSDraggingInfo) {
+            if isForwardingExternalDrop {
+                super.draggingEnded(sender)
+                isForwardingExternalDrop = false
+            }
             reorderIndicatorPlacement = nil
         }
 
         override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool {
-            reorderSource(for: sender) != nil
+            guard sender.draggingSource is DragSourceView else {
+                guard acceptsExternalDrops else { return false }
+                return super.prepareForDragOperation(sender)
+            }
+            return reorderSource(for: sender) != nil
         }
 
         override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            guard sender.draggingSource is DragSourceView else {
+                guard acceptsExternalDrops else { return false }
+                return super.performDragOperation(sender)
+            }
+
             guard let source = reorderSource(for: sender),
                   let targetID = reorderTargetID,
                   let onReorder else {
@@ -357,7 +414,7 @@ struct ShelfDragSource: NSViewRepresentable {
                 axis: reorderAxis,
                 isFlipped: isFlipped
             )
-            let movingIDs = source.itemIDs
+            let movingIDs = source.activeDraggedItemIDs
             source.markAsReordered()
             reorderIndicatorPlacement = nil
 
@@ -394,8 +451,8 @@ struct ShelfDragSource: NSViewRepresentable {
                   let reorderScopeID,
                   source.reorderScopeID == reorderScopeID,
                   let reorderTargetID,
-                  !source.itemIDs.isEmpty,
-                  !source.itemIDs.contains(reorderTargetID),
+                  !source.activeDraggedItemIDs.isEmpty,
+                  !source.activeDraggedItemIDs.contains(reorderTargetID),
                   onReorder != nil else { return nil }
             return source
         }
@@ -416,6 +473,68 @@ struct ShelfDragSource: NSViewRepresentable {
                     point.y > bounds.midY ? .before : .after
                 }
             }
+        }
+
+        struct ReorderCandidate: Equatable {
+            let id: ShelfItem.ID
+            let frame: CGRect
+        }
+
+        enum LocalDropResolution: Equatable {
+            case outsideShelf
+            case keepOnShelf
+            case reorder(ShelfItem.ID, ShelfReorderPlacement)
+        }
+
+        /// Resolves a rejected AppKit drop from its final screen position.
+        /// Item views cover only their visible cells, so gaps between cells do
+        /// not otherwise have a native drag destination. Remaining anywhere
+        /// inside the shelf means reordering (or keeping the current position),
+        /// while leaving this frame preserves normal cross-app drag and drop.
+        static func localDropResolution(
+            at screenPoint: CGPoint,
+            shelfFrame: CGRect,
+            candidates: [ReorderCandidate],
+            movingIDs: Set<ShelfItem.ID>,
+            axis: Axis
+        ) -> LocalDropResolution {
+            guard shelfFrame.contains(screenPoint) else { return .outsideShelf }
+
+            if candidates.contains(where: {
+                movingIDs.contains($0.id) && $0.frame.contains(screenPoint)
+            }) {
+                return .keepOnShelf
+            }
+
+            let stationaryCandidates = candidates.filter {
+                !movingIDs.contains($0.id)
+            }
+            guard let nearest = stationaryCandidates.min(by: { lhs, rhs in
+                let lhsDistance: CGFloat
+                let rhsDistance: CGFloat
+                switch axis {
+                case .horizontal:
+                    lhsDistance = abs(lhs.frame.midX - screenPoint.x)
+                    rhsDistance = abs(rhs.frame.midX - screenPoint.x)
+                case .vertical:
+                    lhsDistance = abs(lhs.frame.midY - screenPoint.y)
+                    rhsDistance = abs(rhs.frame.midY - screenPoint.y)
+                }
+                return lhsDistance < rhsDistance
+            }) else {
+                return .keepOnShelf
+            }
+
+            let placement: ShelfReorderPlacement
+            switch axis {
+            case .horizontal:
+                placement = screenPoint.x < nearest.frame.midX ? .before : .after
+            case .vertical:
+                // Screen coordinates grow upward, while the visible list runs
+                // from the top of the display toward the bottom.
+                placement = screenPoint.y > nearest.frame.midY ? .before : .after
+            }
+            return .reorder(nearest.id, placement)
         }
 
         override func draw(_ dirtyRect: NSRect) {
@@ -460,17 +579,58 @@ struct ShelfDragSource: NSViewRepresentable {
         /// Snapshot taken when the drag begins, so a shelf that changes mid-drag
         /// can't confuse what actually left.
         private var draggedContents: [ShelfItem.Content] = []
+        private var draggedItemIDs: [ShelfItem.ID] = []
         private var completedAsShare = false
         private var completedAsReorder = false
         private var didBeginDragging = false
         private var mouseDownLocation: CGPoint?
+        private var latestDraggingScreenPoint: NSPoint?
+        private var autoScrollTimer: Timer?
+        private weak var autoScrollView: NSScrollView?
 
         static let dragActivationDistance: CGFloat = 4
+        static let autoScrollActivationInset: CGFloat = 42
+        static let maximumAutoScrollStep: CGFloat = 8
 
         static func hasExceededDragThreshold(from start: CGPoint, to current: CGPoint) -> Bool {
             let horizontalDistance = current.x - start.x
             let verticalDistance = current.y - start.y
             return hypot(horizontalDistance, verticalDistance) >= dragActivationDistance
+        }
+
+        /// Returns a signed per-frame scroll step. The speed ramps up as the
+        /// pointer approaches (or crosses) either visible edge.
+        static func autoScrollStep(
+            pointerCoordinate: CGFloat,
+            visibleRange: ClosedRange<CGFloat>,
+            activationInset: CGFloat = autoScrollActivationInset,
+            maximumStep: CGFloat = maximumAutoScrollStep
+        ) -> CGFloat {
+            let visibleLength = visibleRange.upperBound - visibleRange.lowerBound
+            guard visibleLength > 0, activationInset > 0, maximumStep > 0 else {
+                return 0
+            }
+
+            let inset = min(activationInset, visibleLength / 2)
+            let leadingThreshold = visibleRange.lowerBound + inset
+            if pointerCoordinate < leadingThreshold {
+                let progress = min(
+                    1,
+                    max(0, (leadingThreshold - pointerCoordinate) / inset)
+                )
+                return -maximumStep * progress
+            }
+
+            let trailingThreshold = visibleRange.upperBound - inset
+            if pointerCoordinate > trailingThreshold {
+                let progress = min(
+                    1,
+                    max(0, (pointerCoordinate - trailingThreshold) / inset)
+                )
+                return maximumStep * progress
+            }
+
+            return 0
         }
 
         /// Window-local coordinates can jump when the first click arrives while
@@ -502,6 +662,7 @@ struct ShelfDragSource: NSViewRepresentable {
             copyToClipboard(contents)
 
             draggedContents = contents
+            draggedItemIDs = itemIDs
             completedAsShare = false
             completedAsReorder = false
             onDragActiveChange(true)
@@ -516,10 +677,110 @@ struct ShelfDragSource: NSViewRepresentable {
             completedAsReorder = true
         }
 
+        private var activeDraggedItemIDs: [ShelfItem.ID] {
+            draggedItemIDs.isEmpty ? itemIDs : draggedItemIDs
+        }
+
         private func copyToClipboard(_ contents: [ShelfItem.Content]) {
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
             pasteboard.writeObjects(contents.map(\.pasteboardWriter))
+        }
+
+        func draggingSession(
+            _ session: NSDraggingSession,
+            willBeginAt screenPoint: NSPoint
+        ) {
+            startAutoScrolling(at: screenPoint)
+        }
+
+        func draggingSession(
+            _ session: NSDraggingSession,
+            movedTo screenPoint: NSPoint
+        ) {
+            latestDraggingScreenPoint = screenPoint
+        }
+
+        private func startAutoScrolling(at screenPoint: NSPoint) {
+            guard reorderScopeID != nil,
+                  onReorder != nil,
+                  let scrollView = enclosingScrollView else { return }
+
+            latestDraggingScreenPoint = screenPoint
+            autoScrollView = scrollView
+            autoScrollTimer?.invalidate()
+
+            let timer = Timer(
+                timeInterval: 1.0 / 60.0,
+                target: self,
+                selector: #selector(performAutoScrollStep),
+                userInfo: nil,
+                repeats: true
+            )
+            autoScrollTimer = timer
+            RunLoop.main.add(timer, forMode: .eventTracking)
+            RunLoop.main.add(timer, forMode: .common)
+        }
+
+        private func stopAutoScrolling() {
+            autoScrollTimer?.invalidate()
+            autoScrollTimer = nil
+            autoScrollView = nil
+            latestDraggingScreenPoint = nil
+        }
+
+        @objc private func performAutoScrollStep() {
+            guard let screenPoint = latestDraggingScreenPoint,
+                  let scrollView = autoScrollView,
+                  let documentView = scrollView.documentView,
+                  let window = scrollView.window else { return }
+
+            let clipView = scrollView.contentView
+            let windowPoint = window.convertPoint(fromScreen: screenPoint)
+            let pointer = clipView.convert(windowPoint, from: nil)
+            let visibleBounds = clipView.bounds
+            let crossAxisTolerance: CGFloat = 24
+            let delta: CGFloat
+
+            switch reorderAxis {
+            case .horizontal:
+                guard pointer.y >= visibleBounds.minY - crossAxisTolerance,
+                      pointer.y <= visibleBounds.maxY + crossAxisTolerance else { return }
+                delta = Self.autoScrollStep(
+                    pointerCoordinate: pointer.x,
+                    visibleRange: visibleBounds.minX...visibleBounds.maxX
+                )
+            case .vertical:
+                guard pointer.x >= visibleBounds.minX - crossAxisTolerance,
+                      pointer.x <= visibleBounds.maxX + crossAxisTolerance else { return }
+                delta = Self.autoScrollStep(
+                    pointerCoordinate: pointer.y,
+                    visibleRange: visibleBounds.minY...visibleBounds.maxY
+                )
+            }
+
+            guard delta != 0 else { return }
+
+            let documentBounds = documentView.bounds
+            var origin = visibleBounds.origin
+            switch reorderAxis {
+            case .horizontal:
+                let maximumOrigin = max(
+                    documentBounds.minX,
+                    documentBounds.maxX - visibleBounds.width
+                )
+                origin.x = min(max(origin.x + delta, documentBounds.minX), maximumOrigin)
+            case .vertical:
+                let maximumOrigin = max(
+                    documentBounds.minY,
+                    documentBounds.maxY - visibleBounds.height
+                )
+                origin.y = min(max(origin.y + delta, documentBounds.minY), maximumOrigin)
+            }
+
+            guard origin != visibleBounds.origin else { return }
+            clipView.setBoundsOrigin(origin)
+            scrollView.reflectScrolledClipView(clipView)
         }
 
         func draggingSession(
@@ -544,13 +805,35 @@ struct ShelfDragSource: NSViewRepresentable {
             endedAt screenPoint: NSPoint,
             operation: NSDragOperation
         ) {
+            stopAutoScrolling()
             NSLog("[Shelfer] dragOut ended operation=%lu count=%d", operation.rawValue, draggedContents.count)
             onDragActiveChange(false)
             let completed = draggedContents
+            let completedItemIDs = draggedItemIDs
             let wasConsumedInsideShelfer = completedAsShare || completedAsReorder
             draggedContents = []
+            draggedItemIDs = []
             completedAsShare = false
             completedAsReorder = false
+
+            if !wasConsumedInsideShelfer,
+               let resolution = localDropResolution(
+                   at: screenPoint,
+                   movingIDs: Set(completedItemIDs)
+               ) {
+                switch resolution {
+                case .outsideShelf:
+                    break
+                case .keepOnShelf:
+                    return
+                case let .reorder(targetID, placement):
+                    guard let onReorder, !completedItemIDs.isEmpty else { return }
+                    DispatchQueue.main.async {
+                        onReorder(completedItemIDs, targetID, placement)
+                    }
+                    return
+                }
+            }
 
             // An empty operation means the drop was rejected or cancelled,
             // so the items stay on the shelf.
@@ -566,6 +849,49 @@ struct ShelfDragSource: NSViewRepresentable {
             DispatchQueue.main.async { [onCompleted] in
                 onCompleted(completed)
             }
+        }
+
+        private func localDropResolution(
+            at screenPoint: CGPoint,
+            movingIDs: Set<ShelfItem.ID>
+        ) -> LocalDropResolution? {
+            guard let window,
+                  let contentView = window.contentView,
+                  let reorderContainerSize,
+                  reorderScopeID != nil else { return nil }
+
+            let shelfFrame = CGRect(
+                x: window.frame.midX - reorderContainerSize.width / 2,
+                y: window.frame.maxY - reorderContainerSize.height,
+                width: reorderContainerSize.width,
+                height: reorderContainerSize.height
+            )
+            let candidates = Self.dragSourceViews(in: contentView).compactMap {
+                candidate -> ReorderCandidate? in
+                guard candidate.reorderScopeID == reorderScopeID,
+                      let id = candidate.reorderTargetID,
+                      candidate.window === window else { return nil }
+                let frameInWindow = candidate.convert(candidate.bounds, to: nil)
+                return ReorderCandidate(
+                    id: id,
+                    frame: window.convertToScreen(frameInWindow)
+                )
+            }
+            return Self.localDropResolution(
+                at: screenPoint,
+                shelfFrame: shelfFrame,
+                candidates: candidates,
+                movingIDs: movingIDs,
+                axis: reorderAxis
+            )
+        }
+
+        private static func dragSourceViews(in rootView: NSView) -> [DragSourceView] {
+            var results = (rootView as? DragSourceView).map { [$0] } ?? []
+            for subview in rootView.subviews {
+                results.append(contentsOf: dragSourceViews(in: subview))
+            }
+            return results
         }
     }
 }

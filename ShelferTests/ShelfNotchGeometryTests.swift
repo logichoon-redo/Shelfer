@@ -14,6 +14,14 @@ struct ShelfNotchGeometryTests {
     private let leftArea = CGRect(x: 0, y: 950, width: 676, height: 32)
     private let rightArea = CGRect(x: 836, y: 950, width: 676, height: 32)
 
+    @Test func stowedHandleRevealsFasterThanItDismisses() {
+        #expect(
+            ShelfNotchMetrics.peekRevealAnimationDuration
+                < ShelfNotchMetrics.peekHideAnimationDuration
+        )
+        #expect(ShelfNotchMetrics.hoverPollingInterval <= .milliseconds(20))
+    }
+
     @Test func auxiliaryAreaGapBecomesTheNotch() {
         let target = ShelfNotchGeometry.target(
             displayID: 7,
