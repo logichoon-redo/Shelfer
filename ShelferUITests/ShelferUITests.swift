@@ -63,9 +63,7 @@ final class ShelferUITests: XCTestCase {
         app.buttons["Continue"].click()
 
         XCTAssertTrue(app.staticTexts["Use Shelfer from Finder"].waitForExistence(timeout: 2))
-        let openSettingsButton = app.buttons["Open Finder Settings"]
-        let enableButton = app.buttons["Open System Settings"]
-        XCTAssertTrue(openSettingsButton.exists || enableButton.exists)
+        XCTAssertTrue(app.buttons["Open Finder Extension Settings"].exists)
     }
 
     @MainActor

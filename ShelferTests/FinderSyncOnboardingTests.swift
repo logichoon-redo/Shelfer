@@ -19,11 +19,13 @@ struct FinderSyncOnboardingTests {
         var settingsOpenCount = 0
         let access = FinderSyncExtensionAccess(
             isEnabled: { isEnabled },
+            isInstalledInApplications: { true },
             openSystemSettings: { settingsOpenCount += 1 }
         )
         let model = FinderSyncOnboardingModel(extensionAccess: access)
 
         #expect(!model.isEnabled)
+        #expect(model.isInstalledInApplications)
         #expect(model.page == .basics)
 
         model.showFinderIntegration()
@@ -38,6 +40,27 @@ struct FinderSyncOnboardingTests {
 
         model.showBasics()
         #expect(model.page == .basics)
+    }
+
+    @Test func recognizesSystemAndUserApplicationsDirectories() {
+        #expect(
+            FinderSyncInstallation.isInApplicationsDirectory(
+                URL(filePath: "/Applications/Shelfer.app")
+            )
+        )
+        if let accountHomeDirectory = NSHomeDirectoryForUser(NSUserName()) {
+            #expect(
+                FinderSyncInstallation.isInApplicationsDirectory(
+                    URL(filePath: accountHomeDirectory)
+                        .appending(path: "Applications/Shelfer.app")
+                )
+            )
+        }
+        #expect(
+            !FinderSyncInstallation.isInApplicationsDirectory(
+                URL(filePath: "/private/tmp/Shelfer.app")
+            )
+        )
     }
 
     @Test func tutorialPreviewClipsAreBundledWithTheApp() {

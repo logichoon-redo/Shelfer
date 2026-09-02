@@ -86,19 +86,55 @@ private enum ShelferTutorialFeature: String, CaseIterable, Identifiable {
 @MainActor
 struct FinderSyncExtensionAccess {
     var isEnabled: () -> Bool
+    var isInstalledInApplications: () -> Bool
     var openSystemSettings: () -> Void
 
     static let live = Self(
         isEnabled: { FIFinderSyncController.isExtensionEnabled },
+        isInstalledInApplications: {
+            FinderSyncInstallation.isInApplicationsDirectory(Bundle.main.bundleURL)
+        },
         openSystemSettings: {
             FIFinderSyncController.showExtensionManagementInterface()
         }
     )
 }
 
+enum FinderSyncInstallation {
+    static func isInApplicationsDirectory(_ appURL: URL) -> Bool {
+        let standardizedURL = appURL.standardizedFileURL
+        let systemApplicationsURL = URL(
+            filePath: "/Applications",
+            directoryHint: .isDirectory
+        )
+        let accountHomeURLs = [
+            FileManager.default.homeDirectory(forUser: NSUserName()),
+            NSHomeDirectoryForUser(NSUserName()).map {
+                URL(filePath: $0, directoryHint: .isDirectory)
+            },
+        ].compactMap { $0 }
+        let userApplicationsURLs = accountHomeURLs.map {
+            $0.appending(path: "Applications", directoryHint: .isDirectory)
+        }
+
+        return ([systemApplicationsURL] + userApplicationsURLs)
+            .contains { directoryURL in
+                directory(directoryURL, contains: standardizedURL)
+            }
+    }
+
+    private static func directory(_ directoryURL: URL, contains itemURL: URL) -> Bool {
+        let directoryPath = directoryURL.standardizedFileURL.path
+        let itemPath = itemURL.standardizedFileURL.path
+        let prefix = directoryPath.hasSuffix("/") ? directoryPath : directoryPath + "/"
+        return itemPath.hasPrefix(prefix)
+    }
+}
+
 @MainActor
 final class FinderSyncOnboardingModel: ObservableObject {
     @Published private(set) var isEnabled: Bool
+    @Published private(set) var isInstalledInApplications: Bool
     @Published private(set) var page: ShelferOnboardingPage = .basics
 
     private let extensionAccess: FinderSyncExtensionAccess
@@ -106,6 +142,7 @@ final class FinderSyncOnboardingModel: ObservableObject {
     init(extensionAccess: FinderSyncExtensionAccess) {
         self.extensionAccess = extensionAccess
         self.isEnabled = extensionAccess.isEnabled()
+        self.isInstalledInApplications = extensionAccess.isInstalledInApplications()
     }
 
     convenience init() {
@@ -114,6 +151,7 @@ final class FinderSyncOnboardingModel: ObservableObject {
 
     func refresh() {
         isEnabled = extensionAccess.isEnabled()
+        isInstalledInApplications = extensionAccess.isInstalledInApplications()
     }
 
     func openSystemSettings() {
@@ -290,15 +328,15 @@ private struct FinderSyncOnboardingView: View {
             VStack(alignment: .leading, spacing: 13) {
                 onboardingStep(
                     number: 1,
-                    text: "Open the Finder Extensions settings page."
+                    text: "Open General > Login Items & Extensions in System Settings."
                 )
                 onboardingStep(
                     number: 2,
-                    text: "Turn on “Shelfer Finder Menu”."
+                    text: "Under Extensions, open File Providers (Finder on older macOS)."
                 )
                 onboardingStep(
                     number: 3,
-                    text: "Return to Shelfer and confirm the status below."
+                    text: "Turn on “Shelfer Finder Menu”, then return here."
                 )
             }
             .padding(18)
@@ -353,7 +391,7 @@ private struct FinderSyncOnboardingView: View {
                 Spacer()
 
                 if model.isEnabled {
-                    Button("Open Finder Settings") {
+                    Button("Open Finder Extension Settings") {
                         model.openSystemSettings()
                     }
 
@@ -372,7 +410,7 @@ private struct FinderSyncOnboardingView: View {
                         model.refresh()
                     }
 
-                    Button("Open System Settings") {
+                    Button("Open Finder Extension Settings") {
                         model.openSystemSettings()
                     }
                     .buttonStyle(.borderedProminent)
@@ -500,18 +538,32 @@ private struct FinderSyncOnboardingView: View {
     }
 
     private var statusView: some View {
-        Label(
-            model.isEnabled
-                ? "Finder integration is enabled"
-                : "Finder integration is not enabled yet",
-            systemImage: model.isEnabled
-                ? "checkmark.circle.fill"
-                : "exclamationmark.circle.fill"
-        )
-        .font(.system(size: 13, weight: .medium))
-        .foregroundStyle(model.isEnabled ? Color.green : Color.secondary)
-        .contentTransition(.symbolEffect(.replace))
+        VStack(spacing: 7) {
+            Label(
+                model.isEnabled
+                    ? "Finder integration is enabled"
+                    : "Finder integration is not enabled yet",
+                systemImage: model.isEnabled
+                    ? "checkmark.circle.fill"
+                    : "exclamationmark.circle.fill"
+            )
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(model.isEnabled ? Color.green : Color.secondary)
+            .contentTransition(.symbolEffect(.replace))
+
+            if !model.isEnabled && !model.isInstalledInApplications {
+                Text(
+                    "This development copy is outside Applications, so macOS may hide its "
+                        + "Finder extension. Install Shelfer in Applications before testing."
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.orange)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 430)
+            }
+        }
         .animation(.easeInOut(duration: 0.25), value: model.isEnabled)
+        .animation(.easeInOut(duration: 0.25), value: model.isInstalledInApplications)
     }
 
     private func onboardingStep(number: Int, text: String) -> some View {
