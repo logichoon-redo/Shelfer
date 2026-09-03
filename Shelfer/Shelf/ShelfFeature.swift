@@ -205,6 +205,11 @@ struct ShelfFeature {
                 guard state.isPresented else { return .none }
                 state.dockedEdge = edge
                 state.notchDock = nil
+                // Every side-dock entry point renders the same compact return
+                // handle. In particular, dragging an expanded shelf to a
+                // display edge must not leave the handle sized and positioned
+                // using the detail panel's geometry.
+                state.isExpanded = false
                 state.selectedItemIDs.removeAll()
                 return .cancel(id: CancelID.notchLifecycle)
 

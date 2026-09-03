@@ -250,6 +250,36 @@ final class ShelferUITests: XCTestCase {
     }
 
     @MainActor
+    func testDraggingExpandedShelfToDisplayEdgeDocksIt() throws {
+        let app = XCUIApplication()
+        app.launchEnvironment["Shelfer_DEBUG_SEED"] = "/tmp/ShelferEdgeDock.txt"
+        app.launchEnvironment["Shelfer_DEBUG_EXPAND"] = "1"
+        app.launch()
+
+        let background = app.groups["Shelf background"]
+        XCTAssertTrue(background.waitForExistence(timeout: 3))
+
+        let start = background.coordinate(
+            withNormalizedOffset: CGVector(dx: 0.5, dy: 0.9)
+        )
+        start.press(
+            forDuration: 0.15,
+            thenDragTo: start.withOffset(
+                CGVector(dx: 1 - background.frame.midX, dy: 0)
+            )
+        )
+
+        let restoreHandle = app.descendants(matching: .any)["Restore shelf"]
+        XCTAssertTrue(restoreHandle.waitForExistence(timeout: 2))
+        XCTAssertEqual(
+            restoreHandle.frame.height,
+            216,
+            accuracy: 2,
+            "An expanded shelf must reuse the compact side handle geometry"
+        )
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {

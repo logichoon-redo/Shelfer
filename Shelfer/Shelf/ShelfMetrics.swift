@@ -38,7 +38,46 @@ enum ShelfDockMetrics {
     static let revealedWidth: CGFloat = 33
     static let handleWidth: CGFloat = 33
     static let cornerTargetSize: CGFloat = 52
+    /// How close the shelf window must be to a display's visible side edge
+    /// when the pointer is released before it snaps into the docked state.
+    static let edgeCaptureDistance: CGFloat = 20
+    static let minimumDragDistance: CGFloat = 3
     static let animationDuration = 0.32
+}
+
+enum ShelfEdgeDockGeometry {
+    static func edge(
+        accepting shelfFrame: CGRect,
+        in visibleFrame: CGRect,
+        captureDistance: CGFloat = ShelfDockMetrics.edgeCaptureDistance
+    ) -> ShelfDockEdge? {
+        guard shelfFrame.width > 0,
+              shelfFrame.height > 0,
+              shelfFrame.maxX >= visibleFrame.minX,
+              shelfFrame.minX <= visibleFrame.maxX,
+              shelfFrame.maxY >= visibleFrame.minY,
+              shelfFrame.minY <= visibleFrame.maxY else {
+            return nil
+        }
+
+        let reachesLeftEdge = shelfFrame.minX
+            <= visibleFrame.minX + captureDistance
+        let reachesRightEdge = shelfFrame.maxX
+            >= visibleFrame.maxX - captureDistance
+
+        switch (reachesLeftEdge, reachesRightEdge) {
+        case (true, false):
+            return .left
+        case (false, true):
+            return .right
+        case (true, true):
+            let leftDistance = abs(shelfFrame.minX - visibleFrame.minX)
+            let rightDistance = abs(shelfFrame.maxX - visibleFrame.maxX)
+            return leftDistance <= rightDistance ? .left : .right
+        case (false, false):
+            return nil
+        }
+    }
 }
 
 enum ShelfNotchMetrics {

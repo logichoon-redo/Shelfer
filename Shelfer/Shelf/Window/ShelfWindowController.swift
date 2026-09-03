@@ -45,6 +45,7 @@ final class ShelfWindowController {
     private var dockedScreen: NSScreen?
     private var pendingNotchRestorePoint: CGPoint?
     private var didUndockNotchDuringCurrentDrag = false
+    private var userDragStartOrigin: CGPoint?
     private var notchHoverTask: Task<Void, Never>?
     private var notchHoverWatchID: UUID?
     private var notchStowResizeTask: Task<Void, Never>?
@@ -481,7 +482,7 @@ final class ShelfWindowController {
         if let edge {
             if appliedDockEdge == nil {
                 undockedFrame = panel.frame
-                dockedScreen = screen(containing: panel.frame)
+                dockedScreen = dockedScreen ?? screen(containing: panel.frame)
             }
 
             let screen = dockedScreen ?? screen(containing: panel.frame)
@@ -662,6 +663,7 @@ final class ShelfWindowController {
     }
 
     private func userDragBegan() {
+        userDragStartOrigin = panel?.frame.origin
         guard let notchDock = store.notchDock else { return }
 
         switch notchDock.presentation {
@@ -686,6 +688,8 @@ final class ShelfWindowController {
     }
 
     private func userDragEnded(at point: CGPoint) {
+        defer { userDragStartOrigin = nil }
+
         if didUndockNotchDuringCurrentDrag {
             didUndockNotchDuringCurrentDrag = false
             return
@@ -711,20 +715,37 @@ final class ShelfWindowController {
         }
 
         guard store.dockedEdge == nil, let panel else { return }
+        let dragDistance = userDragStartOrigin.map {
+            hypot(panel.frame.minX - $0.x, panel.frame.minY - $0.y)
+        } ?? 0
         let materialFrame = CGRect(
             x: panel.frame.minX,
             y: panel.frame.minY + ShelfShareMetrics.footerHeight,
             width: panel.frame.width,
             height: max(0, panel.frame.height - ShelfShareMetrics.footerHeight)
         )
-        guard let target = ShelfNotchGeometry.target(
+        if let target = ShelfNotchGeometry.target(
             accepting: materialFrame,
             allowsSideContact: store.isExpanded
+        ) {
+            undockedFrame = panel.frame
+            dockedScreen = screen(containing: target.notchFrame)
+            store.send(.notchDockRequested(target))
+            return
+        }
+
+        guard dragDistance > ShelfDockMetrics.minimumDragDistance else { return }
+        let releaseScreen = screen(containing: point)
+        guard let edge = ShelfEdgeDockGeometry.edge(
+            accepting: panel.frame,
+            in: releaseScreen.visibleFrame
         ) else { return }
 
-        undockedFrame = panel.frame
-        dockedScreen = screen(containing: target.notchFrame)
-        store.send(.notchDockRequested(target))
+        // Preserve the display selected by the release point. This matters at
+        // seams between displays where most of the panel can still overlap the
+        // screen it is leaving.
+        dockedScreen = releaseScreen
+        store.send(.dockRequested(edge))
     }
 
     private func wasPulledFromNotch(

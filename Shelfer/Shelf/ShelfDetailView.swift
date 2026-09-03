@@ -622,11 +622,14 @@ struct WindowDragTarget: NSViewRepresentable {
             guard let window, let initialMouseLocation, let initialWindowOrigin else { return }
 
             let location = NSEvent.mouseLocation
-            if hypot(
+            let movement = hypot(
                 location.x - initialMouseLocation.x,
                 location.y - initialMouseLocation.y
-            ) > Self.clickMovementTolerance {
+            )
+            if !exceededClickTolerance,
+               movement > Self.clickMovementTolerance {
                 exceededClickTolerance = true
+                (window as? ShelfPanel)?.beginUserDragTracking()
             }
             window.setFrameOrigin(
                 CGPoint(
@@ -634,10 +637,17 @@ struct WindowDragTarget: NSViewRepresentable {
                     y: initialWindowOrigin.y + location.y - initialMouseLocation.y
                 )
             )
+            if exceededClickTolerance {
+                (window as? ShelfPanel)?.updateUserDragTracking()
+            }
         }
 
         override func mouseUp(with event: NSEvent) {
-            if !exceededClickTolerance {
+            if exceededClickTolerance {
+                (window as? ShelfPanel)?.endUserDragTracking(
+                    at: NSEvent.mouseLocation
+                )
+            } else {
                 onClick()
             }
             initialMouseLocation = nil

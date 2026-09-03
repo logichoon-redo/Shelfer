@@ -63,6 +63,67 @@ struct ShelfSurfaceTests {
         #expect(panel.becomesKeyOnlyIfNeeded)
     }
 
+    @Test func manualWindowDragUsesTheSharedCaptureLifecycle() {
+        let panel = ShelfPanel(contentRect: CGRect(x: 0, y: 0, width: 200, height: 120))
+        var events: [String] = []
+        var endPoint: CGPoint?
+        panel.onUserDragBegan = { events.append("began") }
+        panel.onUserDragMoved = { events.append("moved") }
+        panel.onUserDragEnded = {
+            events.append("ended")
+            endPoint = $0
+        }
+
+        panel.beginUserDragTracking()
+        #expect(panel.isUserDragging)
+        panel.updateUserDragTracking()
+        panel.endUserDragTracking(at: CGPoint(x: 24, y: 48))
+
+        #expect(!panel.isUserDragging)
+        #expect(events == ["began", "moved", "ended"])
+        #expect(endPoint == CGPoint(x: 24, y: 48))
+    }
+
+    @Test func displayEdgeCaptureRecognizesBothSidesAndIgnoresTheInterior() {
+        let screen = CGRect(x: 0, y: 0, width: 1_440, height: 900)
+
+        #expect(
+            ShelfEdgeDockGeometry.edge(
+                accepting: CGRect(x: 18, y: 300, width: 200, height: 288),
+                in: screen
+            ) == .left
+        )
+        #expect(
+            ShelfEdgeDockGeometry.edge(
+                accepting: CGRect(x: 1_220, y: 300, width: 200, height: 288),
+                in: screen
+            ) == .right
+        )
+        #expect(
+            ShelfEdgeDockGeometry.edge(
+                accepting: CGRect(x: 500, y: 300, width: 200, height: 288),
+                in: screen
+            ) == nil
+        )
+    }
+
+    @Test func displayEdgeCaptureRejectsAFrameOutsideTheDisplay() {
+        let screen = CGRect(x: 0, y: 0, width: 1_440, height: 900)
+
+        #expect(
+            ShelfEdgeDockGeometry.edge(
+                accepting: CGRect(x: -400, y: 300, width: 200, height: 288),
+                in: screen
+            ) == nil
+        )
+        #expect(
+            ShelfEdgeDockGeometry.edge(
+                accepting: CGRect(x: 0, y: 1_000, width: 200, height: 288),
+                in: screen
+            ) == nil
+        )
+    }
+
     @Test func itemInteractionCanMakeThePanelKeyForEditingShortcuts() {
         let source = ShelfDragSource.DragSourceView()
 

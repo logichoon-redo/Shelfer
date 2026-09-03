@@ -328,6 +328,21 @@ struct ShelfFeatureTests {
         }
     }
 
+    @Test func dockingAnExpandedShelfUsesTheCompactSharedHandle() async {
+        let store = makeStore(
+            ShelfFeature.State(
+                items: [ShelfItem(.file(url("a.txt")))],
+                isPresented: true,
+                isExpanded: true
+            )
+        )
+
+        await store.send(.dockRequested(.left)) {
+            $0.dockedEdge = .left
+            $0.isExpanded = false
+        }
+    }
+
     @Test func doubleClickingTheDockHandleMakesTheShelfUndocked() async {
         let store = makeStore(
             ShelfFeature.State(isPresented: true, dockedEdge: .right)

@@ -258,23 +258,41 @@ final class ShelfPanel: NSPanel {
     /// eventual mouse-up. Polling the physical button gives the controller a
     /// reliable end point for notch capture and pull-to-restore.
     func performShelfDrag(with event: NSEvent) {
-        guard userDragTask == nil else { return }
+        guard userDragTask == nil, !isPerformingUserDrag else { return }
 
-        isPerformingUserDrag = true
-        onUserDragBegan()
+        beginUserDragTracking()
         performDrag(with: event)
         userDragTask = Task { @MainActor [weak self] in
             while NSEvent.pressedMouseButtons & Self.leftButtonMask != 0 {
                 guard let self, !Task.isCancelled else { return }
-                onUserDragMoved()
+                updateUserDragTracking()
                 try? await Task.sleep(for: .milliseconds(16))
             }
 
             guard let self, !Task.isCancelled else { return }
             userDragTask = nil
-            isPerformingUserDrag = false
-            onUserDragEnded(NSEvent.mouseLocation)
+            endUserDragTracking(at: NSEvent.mouseLocation)
         }
+    }
+
+    /// Detail shelves move through their AppKit background drag targets rather
+    /// than `NSWindow.performDrag(with:)`. Sharing this lifecycle keeps notch
+    /// and display-edge capture identical for both compact and detail layouts.
+    func beginUserDragTracking() {
+        guard !isPerformingUserDrag else { return }
+        isPerformingUserDrag = true
+        onUserDragBegan()
+    }
+
+    func updateUserDragTracking() {
+        guard isPerformingUserDrag else { return }
+        onUserDragMoved()
+    }
+
+    func endUserDragTracking(at point: CGPoint) {
+        guard isPerformingUserDrag else { return }
+        isPerformingUserDrag = false
+        onUserDragEnded(point)
     }
 
     func cancelUserDragTracking() {
